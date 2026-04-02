@@ -1,4 +1,5 @@
-# Daily portfolio summary email (SendGrid). Code lives under Code/Stock/.
+# Daily portfolio summary email (SendGrid).
+# Repo layout: repository root = this folder (main.py, daily_summary.py, requirements-prod.txt at root).
 name: Daily portfolio summary
 
 on:
@@ -47,12 +48,11 @@ jobs:
 
       - name: Install dependencies
         if: steps.sent_marker.outputs.cache-hit != 'true'
-        run: pip install -r Code/requirements-prod.txt
+        run: pip install -r requirements-prod.txt
 
       - name: Generate summary and send email
         if: steps.sent_marker.outputs.cache-hit != 'true'
-        working-directory: Code/Stock
         run: |
           set -euo pipefail
           python daily_summary.py | python send_email_sendgrid.py
-          echo "${{ steps.nydate.outputs.d }}" > ../../.daily-summary-sent.marker
+          echo "${{ steps.nydate.outputs.d }}" > .daily-summary-sent.marker
