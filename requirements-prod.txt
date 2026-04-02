@@ -1,0 +1,7 @@
+# Minimal deps for Code/Stock/daily_summary.py (no FastAPI/uvicorn).
+# main.py imports FastAPI optionally; the daily runner does not start the server.
+yfinance>=0.2
+pandas>=2.0
+supabase>=2.0
+python-dotenv>=1.0
+google-genai>=0.5
