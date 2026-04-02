@@ -428,6 +428,40 @@ def _calc_position_metrics(symbol: str, shares: float, cost_basis: float) -> Dic
     }
 
 
+def _portfolio_sector_from_row(row: Dict[str, Any]) -> Optional[str]:
+    raw = row.get("sector")
+    if raw is None:
+        return None
+    s = str(raw).strip()
+    return s if s else None
+
+
+def _yfinance_sector_label(symbol: str) -> str:
+    """Sector (or industry) from Yahoo metadata; 'Unknown' if missing or on error."""
+    sym = _normalize_symbol(symbol)
+    if yf is None:  # pragma: no cover
+        return "Unknown"
+    try:
+        info = yf.Ticker(sym).info or {}
+        raw = info.get("sector") or info.get("industry") or ""
+        s = str(raw).strip()
+        return s if s else "Unknown"
+    except Exception:
+        return "Unknown"
+
+
+def _try_persist_portfolio_sector(sb: Any, portfolio_table: str, symbol: str, sector: str) -> None:
+    """Write sector to Supabase when we learned it from the network (column must exist)."""
+    if _bool_env("SUPABASE_SKIP_SECTOR_PERSIST", False):
+        return
+    if not sector or sector == "Unknown":
+        return
+    try:
+        sb.table(portfolio_table).update({"sector": sector}).eq("symbol", symbol).execute()
+    except Exception:
+        pass
+
+
 def _sector_breakdown(positions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     # Sector is best-effort only; yfinance frequently omits it.
     sector_value: Dict[str, float] = defaultdict(float)
@@ -1025,13 +1059,21 @@ def run_portfolio_analysis() -> Dict[str, Any]:
     warnings: List[str] = []
     for row in holding_rows:
         try:
-            positions.append(
-                _calc_position_metrics(
-                    row["symbol"],
-                    _safe_float(row.get("shares"), 0.0),
-                    _safe_float(row.get("cost_basis"), 0.0),
-                )
+            sym = _normalize_symbol(row["symbol"])
+            pos = _calc_position_metrics(
+                sym,
+                _safe_float(row.get("shares"), 0.0),
+                _safe_float(row.get("cost_basis"), 0.0),
             )
+            stored_sec = _portfolio_sector_from_row(row)
+            if stored_sec:
+                pos["sector"] = stored_sec
+            else:
+                label = _yfinance_sector_label(sym)
+                pos["sector"] = label
+                if label != "Unknown":
+                    _try_persist_portfolio_sector(sb, portfolio_table, sym, label)
+            positions.append(pos)
         except Exception as e:
             warnings.append(f"{row.get('symbol')}: data error — {str(e)}")
 
