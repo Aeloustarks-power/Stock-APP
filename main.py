@@ -755,14 +755,21 @@ def _policy_actions(
 
 
 def _build_ai_prompt(policy_report: Dict[str, Any]) -> str:
-    actions = policy_report.get("policy", {}).get("recommended_actions", [])
+    pol = policy_report.get("policy") or {}
+    actions = pol.get("recommended_actions", [])
     qqq = policy_report.get("qqq", {})
     spy = policy_report.get("spy", {})
     combined = int(policy_report.get("combined_dip_level", 0))
     why_no_other = policy_report.get("why_no_other_actions", [])
     uncertainty_notes = policy_report.get("uncertainty_notes", [])
-    totals = policy_report.get("policy", {}).get("totals", {})
-    constraints = policy_report.get("policy", {}).get("constraints", {})
+    totals = pol.get("totals", {})
+    constraints = pol.get("constraints", {})
+    positions = list(policy_report.get("positions") or [])
+    sectors = list(policy_report.get("sector_breakdown") or [])
+    notes = list(pol.get("notes") or [])
+    warnings = list(policy_report.get("warnings") or [])
+    holdings_count = int(pol.get("holdings_count", len({p.get("symbol") for p in positions}) or 0))
+    max_new_buys = int(pol.get("max_new_buys", 0))
 
     def fmt_action(a: Dict[str, Any]) -> str:
         sym = a.get("symbol", "?")
@@ -775,8 +782,34 @@ def _build_ai_prompt(policy_report: Dict[str, Any]) -> str:
 
     lines = [fmt_action(a) for a in actions[:10]]
 
-    return f"""You are a concise portfolio assistant. You must ONLY use the numbers and tickers provided below. Do NOT invent prices, tickers, or metrics.
-You are allowed to restate the rules and triggers, but you MUST NOT introduce any new tickers, thresholds, or calculations.
+    pos_sorted = sorted(positions, key=lambda p: -_safe_float(p.get("weight_pct"), 0.0))[:8]
+    pos_lines: List[str] = []
+    for p in pos_sorted:
+        sym = p.get("symbol", "?")
+        w = _safe_float(p.get("weight_pct"), 0.0)
+        val = _safe_float(p.get("position_value"), 0.0)
+        pnl = _safe_float(p.get("pnl"), 0.0)
+        rsi = _safe_float(p.get("rsi"), 0.0)
+        px = _safe_float(p.get("current_price"), 0.0)
+        ma = _safe_float(p.get("ma20"), 0.0)
+        vs = "above MA20" if px >= ma else "below MA20"
+        pos_lines.append(
+            f"- {sym}: weight {w:.2f}%, value ${val:,.0f}, P/L ${pnl:+,.0f}, RSI {rsi:.0f}, {vs}"
+        )
+
+    sec_lines = [
+        f"- {s.get('sector', '?')}: {s.get('weight_pct', 0):.1f}% (${s.get('value', 0):,.0f})"
+        for s in sectors[:6]
+    ]
+
+    q_close = qqq.get("close")
+    s_close = spy.get("close")
+    bench = ""
+    if q_close is not None and s_close is not None:
+        bench = f"- QQQ last ${q_close}, SPY last ${s_close}"
+
+    return f"""You are a portfolio assistant. Use ONLY the numbers and tickers below. Do NOT invent prices, tickers, or metrics.
+You may restate rules and triggers; do NOT introduce new tickers, thresholds, or calculations.
 
 Policy:
 - Cash floor: {constraints.get('cash_floor_pct', 0.15)*100:.0f}% (do not recommend buys that drop below it)
@@ -784,30 +817,54 @@ Policy:
 - Min trade: ${constraints.get('min_trade_usd', 200):.0f}
 
 Today:
-- Portfolio value: ${totals.get('total_value', 0):.2f}
+- Portfolio value: ${totals.get('total_value', 0):.2f} (invested ${totals.get('total_invested', 0):.2f})
 - Cash: ${totals.get('cash_usd', 0):.2f} ({totals.get('cash_pct', 0):.2f}%)
+- Cash needed to reach floor: ${totals.get('cash_needed_usd', 0):.2f}
 - Excess cash above floor: ${totals.get('excess_cash_usd', 0):.2f}
+- Deploy budget (rules): ${totals.get('deploy_budget_usd', 0):.2f}
+- Holdings: {holdings_count} / max {constraints.get('max_holdings', 18)}, new-buy slots: {max_new_buys}
 - Dip level (dual benchmark): L{combined} (max of QQQ/SPY)
 - QQQ: L{qqq.get('dip_level', 0)} (6M {qqq.get('drawdown_6m_pct', 0):.2f}%, 12M {qqq.get('drawdown_12m_pct', 0):.2f}%)
 - SPY: L{spy.get('dip_level', 0)} (6M {spy.get('drawdown_6m_pct', 0):.2f}%, 12M {spy.get('drawdown_12m_pct', 0):.2f}%)
+{bench}
 
-Recommended actions (already computed by rules; you only prioritize and explain):
+Recommended actions (already computed; you prioritize and explain):
 {chr(10).join(lines) if lines else "- (none)"}
 
-Why no other actions (use this as the reason text if applicable):
+Top holdings (reference for narrative):
+{chr(10).join(pos_lines) if pos_lines else "- (none)"}
+
+Sector mix:
+{chr(10).join(sec_lines) if sec_lines else "- Unknown / not grouped"}
+
+Policy engine notes:
+{chr(10).join(f"- {n}" for n in notes) if notes else "- (none)"}
+
+Why no other actions:
 {chr(10).join(f"- {x}" for x in why_no_other) if why_no_other else "- (n/a)"}
 
-Uncertainty / confidence notes (use at most one short sentence):
+Uncertainty / confidence:
 {chr(10).join(f"- {x}" for x in uncertainty_notes) if uncertainty_notes else "- Data looks complete; monitoring only."}
 
-Output format (max 9 bullets total, exact section order):
+Data warnings:
+{chr(10).join(f"- {w}" for w in warnings) if warnings else "- (none)"}
+
+Output format (numbered lines, no markdown tables):
 1) Status: OK / Attention / Action.
-2) Market: one line with combined dip level + brief context.
-3) Cash: one line with cash% and cash floor.
-4-6) Actions: up to 3 bullets. Each must be "SYMBOL — ACTION — $ — ~shares — (Rule: ...)".
-7) Why: exactly one bullet explaining why there are no other actions (or why no action).
-8) Uncertainty: exactly one short sentence (pick the most relevant note).
-9) Disclaimer: "Not financial advice; rules are heuristic."
+2) Market: one line (dip level + brief context; mention QQQ/SPY if useful).
+3) Cash: one line (cash%, floor, excess or shortfall vs floor).
+4) Actions: line 1 — "SYMBOL — ACTION — $ — ~shares — (Rule: ...)" or (none).
+5) Actions: line 2 — same format or (none).
+6) Actions: line 3 — same format or (none).
+7) Why: one line (consolidate "why no other actions").
+8) Uncertainty: one short sentence.
+9) Disclaimer: Not financial advice; rules are heuristic.
+10) Portfolio: one line (size, deploy budget, largest concentration if obvious from the list).
+11) Holdings: 2–4 short lines on top names by weight (symbols from "Top holdings" only).
+12) Sectors: 1–2 lines on mix (or note if sector data is mostly Unknown).
+13) Risks / data: one line (warnings or "none").
+14) Optional: one line on RSI/MA20 for a top holding if notable (numbers from the list only).
+Keep total under ~22 short lines; stay factual.
 """
 
 
@@ -874,6 +931,69 @@ def rules_only_summary_from_policy(policy_report: Dict[str, Any]) -> str:
         f"9) Disclaimer: {disclaimer}",
     ]
     return "\n".join(parts)
+
+
+def rich_policy_appendix(policy_report: Dict[str, Any]) -> str:
+    """Structured snapshot from policy_report (plain lines, no markdown tables). For email/API extras."""
+    pol = policy_report.get("policy") or {}
+    totals = pol.get("totals") or {}
+    constraints = pol.get("constraints") or {}
+    positions = list(policy_report.get("positions") or [])
+    sectors = list(policy_report.get("sector_breakdown") or [])
+    notes = list(pol.get("notes") or [])
+    warnings = list(policy_report.get("warnings") or [])
+    qqq = policy_report.get("qqq") or {}
+    spy = policy_report.get("spy") or {}
+    holdings_count = int(pol.get("holdings_count", len({p.get("symbol") for p in positions}) or 0))
+    max_h = int(constraints.get("max_holdings", 18))
+
+    lines: List[str] = ["--- Portfolio snapshot ---"]
+    lines.append(
+        f"Total ${totals.get('total_value', 0):,.2f} (invested ${totals.get('total_invested', 0):,.2f}). "
+        f"Holdings {holdings_count} / cap {max_h}, new-buy slots {pol.get('max_new_buys', 0)}."
+    )
+    lines.append(
+        f"Cash floor gap ${totals.get('cash_needed_usd', 0):,.2f}; excess ${totals.get('excess_cash_usd', 0):,.2f}; "
+        f"deploy budget ${totals.get('deploy_budget_usd', 0):,.2f}."
+    )
+    if not qqq.get("error") and qqq.get("close") is not None:
+        qs = f"QQQ ${qqq.get('close')}"
+        if not spy.get("error") and spy.get("close") is not None:
+            qs += f", SPY ${spy.get('close')}"
+        lines.append(f"Benchmark last close: {qs}.")
+
+    pos_sorted = sorted(positions, key=lambda p: -_safe_float(p.get("weight_pct"), 0.0))[:8]
+    if pos_sorted:
+        lines.append("Top holdings (weight, value, P/L, RSI vs MA20):")
+        for p in pos_sorted:
+            sym = p.get("symbol", "?")
+            w = _safe_float(p.get("weight_pct"), 0.0)
+            val = _safe_float(p.get("position_value"), 0.0)
+            pnl = _safe_float(p.get("pnl"), 0.0)
+            rsi = _safe_float(p.get("rsi"), 0.0)
+            px = _safe_float(p.get("current_price"), 0.0)
+            ma = _safe_float(p.get("ma20"), 0.0)
+            vs = "above" if px >= ma else "below"
+            lines.append(f"  {sym}: {w:.2f}%  ${val:,.0f}  P/L ${pnl:+,.0f}  RSI {rsi:.0f}  {vs} MA20")
+
+    if sectors:
+        lines.append("Sector mix:")
+        for s in sectors[:6]:
+            lines.append(
+                f"  {s.get('sector', '?')}: {s.get('weight_pct', 0):.1f}% (${s.get('value', 0):,.0f})"
+            )
+
+    if notes:
+        lines.append("Policy notes:")
+        for n in notes[:5]:
+            lines.append(f"  - {n}")
+
+    if warnings:
+        lines.append("Data warnings:")
+        for w in warnings[:10]:
+            lines.append(f"  - {w}")
+
+    return "\n".join(lines)
 
 
 def run_portfolio_analysis() -> Dict[str, Any]:
