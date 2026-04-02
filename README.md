@@ -4,6 +4,14 @@
 
 FastAPI app in `Stock/main.py`. Endpoints include `POST /api/analyze-portfolio`, which returns JSON with `ai_summary`, `policy_report`, and optional `ai_error`.
 
+### Supabase `portfolio` table
+
+Required columns include `symbol`, `shares`, `cost_basis` (plus any cash row you use). Add an optional nullable **`sector`** column (`text`). On each analysis, if `sector` is empty the app loads sector/industry once from Yahoo metadata, attaches it to positions for the sector mix, and **`update`s that row** so the next run reads from the DB only. If the column is missing, persistence fails silently; set **`SUPABASE_SKIP_SECTOR_PERSIST=1`** to skip writes. Example:
+
+```sql
+alter table portfolio add column if not exists sector text;
+```
+
 ### API quickstart (local)
 
 ```bash
