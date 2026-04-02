@@ -4,10 +4,13 @@ name: Daily portfolio summary
 
 on:
   schedule:
-    # Weekdays only (Mon–Fri UTC cron: 1–5). US cash equities are closed Sat–Sun.
-    # 23:00 UTC ≈ 6:00 PM EST / 7:00 PM EDT — after regular US equity close (4:00 PM ET).
-    # DST shifts NY vs UTC by 1h; still after close on trading days. US exchange holidays are not skipped.
-    - cron: "0 23 * * 1-5"
+    # Target: 10:30 Mon–Fri in Australia/Melbourne (weekday mornings).
+    # GitHub cron is UTC-only. During AEDT (Melbourne UTC+11, ~first Sun Oct → first Sun Apr):
+    #   Sun–Thu 23:30 UTC → Mon–Fri 10:30 Melbourne.
+    # When Melbourne is on AEST (UTC+10, ~Apr–Oct), switch this line to:
+    #   cron: "30 0 * * 1-5"
+    # (Mon–Fri 00:30 UTC = 10:30 Melbourne AEST). Swap twice a year or accept ~1h drift.
+    - cron: "30 23 * * 0-4"
   workflow_dispatch: {}
 
 concurrency:
@@ -31,20 +34,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Date in America/New_York (YYYY-MM-DD)
-        id: nydate
-        run: echo "d=$(TZ=America/New_York date +%F)" >> "$GITHUB_OUTPUT"
+      - name: Date in Australia/Melbourne (YYYY-MM-DD)
+        id: melbdate
+        run: echo "d=$(TZ=Australia/Melbourne date +%F)" >> "$GITHUB_OUTPUT"
 
       - uses: actions/cache@v4
         id: sent_marker
         with:
           path: .daily-summary-sent.marker
-          key: daily-summary-email-${{ steps.nydate.outputs.d }}
+          key: daily-summary-email-${{ steps.melbdate.outputs.d }}
 
       - name: Skip notice (no email this run)
         if: steps.sent_marker.outputs.cache-hit == 'true'
         run: |
-          echo "Email step was SKIPPED: a send was already recorded for ${{ steps.nydate.outputs.d }} (America/New_York)."
+          echo "Email step was SKIPPED: a send was already recorded for ${{ steps.melbdate.outputs.d }} (Australia/Melbourne)."
           echo "GitHub Actions cache prevents duplicate sends the same calendar day. Check Spam, or clear repo Actions caches / wait until tomorrow to test again."
 
       - name: Set up Python
@@ -90,4 +93,4 @@ jobs:
         run: |
           set -euo pipefail
           python daily_summary.py | python send_email_sendgrid.py
-          echo "${{ steps.nydate.outputs.d }}" > .daily-summary-sent.marker
+          echo "${{ steps.melbdate.outputs.d }}" > .daily-summary-sent.marker
