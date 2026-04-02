@@ -69,7 +69,7 @@ Everything for the daily email lives under **`Stock/`**: `main.py`, `daily_summa
 
 GitHub only runs workflows from **the repository root** `.github/workflows/`. If you publish **only** the `Stock` folder as its own repo, that workflow path is already correct. If your GitHub repo root is **`Code/`** or the whole monorepo, copy `Stock/.github/workflows/main.yml` to **`<repo-root>/.github/workflows/`** and edit the YAML: use `pip install -r Code/Stock/requirements-prod.txt` (or `Stock/requirements-prod.txt` if root is `Code/`) and add `working-directory: Code/Stock` (or `Stock`) on the “Generate summary” step.
 
-The workflow runs **weekdays only** (Mon–Fri UTC cron; see `main.yml`). US markets are closed weekends; federal holidays are **not** auto-skipped. It fires after US equity close (see cron comments), supports **Run workflow** manually, and skips sending if a **per-day cache marker** already exists.
+The workflow runs **weekdays only**, scheduled for **~10:30 Australia/Melbourne** (see `main.yml`; UTC cron must be adjusted when Melbourne switches AEDT/AEST). US exchange holidays are **not** auto-skipped. **Run workflow** works anytime; a **per-day cache marker** can skip duplicate sends the same Melbourne calendar day.
 
 The daily email body is the AI/rules summary plus a **plain-text portfolio snapshot** (top holdings, sector mix, deploy budget, benchmark closes, notes/warnings) appended by `rich_policy_appendix` in `main.py`.
 
