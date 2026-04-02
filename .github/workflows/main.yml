@@ -50,6 +50,34 @@ jobs:
         if: steps.sent_marker.outputs.cache-hit != 'true'
         run: pip install -r requirements-prod.txt
 
+      # Fails fast with clear errors if secrets are missing (does not print values).
+      - name: Verify secrets are visible to Actions
+        if: steps.sent_marker.outputs.cache-hit != 'true'
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_PORTFOLIO_TABLE: ${{ secrets.SUPABASE_PORTFOLIO_TABLE }}
+          PORTFOLIO_CASH_USD: ${{ secrets.PORTFOLIO_CASH_USD }}
+          SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
+          EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+        run: |
+          set -euo pipefail
+          err=0
+          check() { if [ -z "${!1:-}" ]; then echo "::error::Missing or empty GitHub Actions secret: $1 (Repository settings → Secrets and variables → Actions → Secrets)" >&2; err=1; fi; }
+          check SUPABASE_URL
+          if [ -z "${SUPABASE_ANON_KEY:-}" ] && [ -z "${SUPABASE_SERVICE_ROLE_KEY:-}" ]; then
+            echo "::error::Set at least one of: SUPABASE_ANON_KEY or SUPABASE_SERVICE_ROLE_KEY" >&2
+            err=1
+          fi
+          check SUPABASE_PORTFOLIO_TABLE
+          check PORTFOLIO_CASH_USD
+          check SENDGRID_API_KEY
+          check EMAIL_TO
+          check EMAIL_FROM
+          exit "$err"
+
       - name: Generate summary and send email
         if: steps.sent_marker.outputs.cache-hit != 'true'
         run: |
