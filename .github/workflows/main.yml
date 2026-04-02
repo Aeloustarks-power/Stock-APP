@@ -1,0 +1,58 @@
+# Daily portfolio summary email (SendGrid). Code lives under Code/Stock/.
+name: Daily portfolio summary
+
+on:
+  schedule:
+    # 23:00 UTC ≈ 6:00 PM EST / 7:00 PM EDT — after regular US equity close (4:00 PM ET).
+    # DST note: offset vs New York shifts by 1h; this stays safely after close year-round.
+    - cron: "0 23 * * *"
+  workflow_dispatch: {}
+
+concurrency:
+  group: daily-summary-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  email-summary:
+    runs-on: ubuntu-latest
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      SUPABASE_PORTFOLIO_TABLE: ${{ secrets.SUPABASE_PORTFOLIO_TABLE }}
+      PORTFOLIO_CASH_USD: ${{ secrets.PORTFOLIO_CASH_USD }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY }}
+      EMAIL_TO: ${{ secrets.EMAIL_TO }}
+      EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Date in America/New_York (YYYY-MM-DD)
+        id: nydate
+        run: echo "d=$(TZ=America/New_York date +%F)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/cache@v4
+        id: sent_marker
+        with:
+          path: .daily-summary-sent.marker
+          key: daily-summary-email-${{ steps.nydate.outputs.d }}
+
+      - name: Set up Python
+        if: steps.sent_marker.outputs.cache-hit != 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        if: steps.sent_marker.outputs.cache-hit != 'true'
+        run: pip install -r Code/requirements-prod.txt
+
+      - name: Generate summary and send email
+        if: steps.sent_marker.outputs.cache-hit != 'true'
+        working-directory: Code/Stock
+        run: |
+          set -euo pipefail
+          python daily_summary.py | python send_email_sendgrid.py
+          echo "${{ steps.nydate.outputs.d }}" > ../../.daily-summary-sent.marker
