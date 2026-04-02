@@ -34,35 +34,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Date in Australia/Melbourne (YYYY-MM-DD)
-        id: melbdate
-        run: echo "d=$(TZ=Australia/Melbourne date +%F)" >> "$GITHUB_OUTPUT"
-
-      - uses: actions/cache@v4
-        id: sent_marker
-        with:
-          path: .daily-summary-sent.marker
-          key: daily-summary-email-${{ steps.melbdate.outputs.d }}
-
-      - name: Skip notice (no email this run)
-        if: steps.sent_marker.outputs.cache-hit == 'true'
-        run: |
-          echo "Email step was SKIPPED: a send was already recorded for ${{ steps.melbdate.outputs.d }} (Australia/Melbourne)."
-          echo "GitHub Actions cache prevents duplicate sends the same calendar day. Check Spam, or clear repo Actions caches / wait until tomorrow to test again."
-
       - name: Set up Python
-        if: steps.sent_marker.outputs.cache-hit != 'true'
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
       - name: Install dependencies
-        if: steps.sent_marker.outputs.cache-hit != 'true'
         run: pip install -r requirements-prod.txt
 
       # Fails fast with clear errors if secrets are missing (does not print values).
       - name: Verify secrets are visible to Actions
-        if: steps.sent_marker.outputs.cache-hit != 'true'
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
@@ -89,8 +70,6 @@ jobs:
           exit "$err"
 
       - name: Generate summary and send email
-        if: steps.sent_marker.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
           python daily_summary.py | python send_email_sendgrid.py
-          echo "${{ steps.melbdate.outputs.d }}" > .daily-summary-sent.marker
