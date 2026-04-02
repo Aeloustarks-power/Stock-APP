@@ -4,9 +4,10 @@ name: Daily portfolio summary
 
 on:
   schedule:
+    # Weekdays only (Mon–Fri UTC cron: 1–5). US cash equities are closed Sat–Sun.
     # 23:00 UTC ≈ 6:00 PM EST / 7:00 PM EDT — after regular US equity close (4:00 PM ET).
-    # DST note: offset vs New York shifts by 1h; this stays safely after close year-round.
-    - cron: "0 23 * * *"
+    # DST shifts NY vs UTC by 1h; still after close on trading days. US exchange holidays are not skipped.
+    - cron: "0 23 * * 1-5"
   workflow_dispatch: {}
 
 concurrency:
@@ -39,6 +40,12 @@ jobs:
         with:
           path: .daily-summary-sent.marker
           key: daily-summary-email-${{ steps.nydate.outputs.d }}
+
+      - name: Skip notice (no email this run)
+        if: steps.sent_marker.outputs.cache-hit == 'true'
+        run: |
+          echo "Email step was SKIPPED: a send was already recorded for ${{ steps.nydate.outputs.d }} (America/New_York)."
+          echo "GitHub Actions cache prevents duplicate sends the same calendar day. Check Spam, or clear repo Actions caches / wait until tomorrow to test again."
 
       - name: Set up Python
         if: steps.sent_marker.outputs.cache-hit != 'true'
