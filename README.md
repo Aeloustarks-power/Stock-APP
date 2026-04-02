@@ -71,6 +71,14 @@ GitHub only runs workflows from **the repository root** `.github/workflows/`. If
 
 The workflow runs on a daily UTC schedule (after US market close; see comments in the file), supports **Run workflow** manually, and skips sending if a **per-day cache marker** already exists.
 
+**If the job says secrets are missing** but you added them, check:
+
+1. **Correct place:** **Repository** → **Settings** → **Secrets and variables** → **Actions** → tab **Secrets** (not *Variables* — those use `vars.NAME` in YAML, not `secrets.NAME`).
+2. **Exact names:** Must match the workflow: `SUPABASE_URL`, `SUPABASE_ANON_KEY` *or* `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_PORTFOLIO_TABLE`, `PORTFOLIO_CASH_USD`, `SENDGRID_API_KEY`, `EMAIL_TO`, `EMAIL_FROM` (case-sensitive).
+3. **Environment secrets:** If you stored them under an **Environment** (e.g. `production`), add `environment: production` to the job in `main.yml`, or move secrets to **repository** Actions secrets.
+4. **Same repo:** Secrets apply to this repo only; confirm the workflow run is on the branch/repo where you added them (not a fork without secrets).
+5. **Re-run** after adding secrets; old failed runs do not retroactively get new secrets until the next run.
+
 ### Dependencies
 
 - `requirements.txt` (under `Code/`) — dev/API (includes FastAPI, uvicorn, pytest, etc.).
