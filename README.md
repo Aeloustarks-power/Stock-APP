@@ -48,32 +48,39 @@ export GEMINI_API_KEY=...   # optional
 python Stock/daily_summary.py
 ```
 
-Email the same body with SendGrid (stdin = plain text):
+Mail goes out **through Gmail SMTP** with **From = your Gmail** (good fit when you don’t have your own domain).
 
 ```bash
-python Stock/daily_summary.py | python Stock/send_email_sendgrid.py
+export GMAIL_ADDRESS=you@gmail.com
+export GMAIL_APP_PASSWORD=xxxx    # 16-char App Password, not your login password
+export EMAIL_TO=you@gmail.com     # or a@x.com,b@y.com
+python Stock/daily_summary.py | python Stock/send_email_gmail.py
 ```
 
-Requires `SENDGRID_API_KEY`, `EMAIL_TO`, `EMAIL_FROM`. Use **comma- or semicolon-separated** addresses in `EMAIL_TO` for multiple recipients (one GitHub secret). On failure the sender prints a short message to **stderr** and exits non-zero.
+**Gmail App Password setup**
 
-**GitHub Actions** does not read `.env`; configure **repository secrets** and map them to `env` in the workflow.
+1. Google Account → **Security** → enable **2-Step Verification**.
+2. **Security** → **App passwords** → create one for “Mail” / “Other” → copy the **16-character** password (spaces optional; the script strips them).
+3. Store it only in **GitHub Actions secrets** or local `.env` (never commit).
+
+**GitHub Actions** does not read `.env`; use **repository secrets**.
 
 ### GitHub Actions secrets (daily email workflow)
 
-Add under **Settings → Secrets and variables → Actions**:
+The bundled workflow uses **Gmail SMTP**. Add under **Settings → Secrets and variables → Actions → Secrets**:
 
 | Secret | Required |
 |--------|----------|
 | `SUPABASE_URL` | yes |
-| `SUPABASE_ANON_KEY` | yes (or use service role via `SUPABASE_SERVICE_ROLE_KEY` in app env; the workflow sets `SUPABASE_ANON_KEY`) |
+| `SUPABASE_ANON_KEY` | yes (or `SUPABASE_SERVICE_ROLE_KEY`) |
 | `SUPABASE_PORTFOLIO_TABLE` | yes |
-| `PORTFOLIO_CASH_USD` | yes (use `0` if cash is only in the table) |
-| `SENDGRID_API_KEY` | yes |
-| `EMAIL_TO` | yes (multiple: `a@x.com,b@y.com`) |
-| `EMAIL_FROM` | yes (verified sender in SendGrid) |
+| `PORTFOLIO_CASH_USD` | yes |
+| `GMAIL_ADDRESS` | yes (full Gmail you send **from**) |
+| `GMAIL_APP_PASSWORD` | yes (App Password) |
+| `EMAIL_TO` | yes (comma-separated allowed) |
 | `GEMINI_API_KEY` | no |
 
-Everything for the daily email lives under **`Stock/`**: `main.py`, `daily_summary.py`, `send_email_sendgrid.py`, `requirements-prod.txt`, and **`Stock/.github/workflows/main.yml`**.
+Everything for the daily email lives under **`Stock/`**: `main.py`, `daily_summary.py`, `send_email_gmail.py`, `email_multipart.py`, `requirements-prod.txt`, **`Stock/.github/workflows/main.yml`**.
 
 GitHub only runs workflows from **the repository root** `.github/workflows/`. If you publish **only** the `Stock` folder as its own repo, that workflow path is already correct. If your GitHub repo root is **`Code/`** or the whole monorepo, copy `Stock/.github/workflows/main.yml` to **`<repo-root>/.github/workflows/`** and edit the YAML: use `pip install -r Code/Stock/requirements-prod.txt` (or `Stock/requirements-prod.txt` if root is `Code/`) and add `working-directory: Code/Stock` (or `Stock`) on the “Generate summary” step.
 
@@ -84,7 +91,7 @@ The daily email body is the AI/rules summary plus a **plain-text portfolio snaps
 **If the job says secrets are missing** but you added them, check:
 
 1. **Correct place:** **Repository** → **Settings** → **Secrets and variables** → **Actions** → tab **Secrets** (not *Variables* — those use `vars.NAME` in YAML, not `secrets.NAME`).
-2. **Exact names:** Must match the workflow: `SUPABASE_URL`, `SUPABASE_ANON_KEY` *or* `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_PORTFOLIO_TABLE`, `PORTFOLIO_CASH_USD`, `SENDGRID_API_KEY`, `EMAIL_TO`, `EMAIL_FROM` (case-sensitive).
+2. **Exact names:** Must match the workflow (e.g. `GMAIL_ADDRESS`, `GMAIL_APP_PASSWORD`, `EMAIL_TO`, plus Supabase vars). Case-sensitive.
 3. **Environment secrets:** If you stored them under an **Environment** (e.g. `production`), add `environment: production` to the job in `main.yml`, or move secrets to **repository** Actions secrets.
 4. **Same repo:** Secrets apply to this repo only; confirm the workflow run is on the branch/repo where you added them (not a fork without secrets).
 5. **Re-run** after adding secrets; old failed runs do not retroactively get new secrets until the next run.
