@@ -25,12 +25,12 @@ Then call `POST /api/analyze-portfolio` (or use `Stock/daily_summary.py` below).
 
 `Stock/daily_summary.py` calls the same core logic as `POST /api/analyze-portfolio` (`run_portfolio_analysis` in `main.py`). It prints the final summary to **stdout** only. If `GEMINI_API_KEY` is missing or Gemini fails, it falls back to a **rules-only** text built from `policy_report` (sections 1–9: Status, Market, Cash, three Actions lines, Why, Uncertainty, Disclaimer).
 
-Local run (from repo root or any cwd; load `.env` from `Stock/` if present):
+Local run (load `.env` from `Stock/` if present):
 
 ```bash
 cd Code
 source .venv/bin/activate
-pip install -r requirements-prod.txt
+pip install -r Stock/requirements-prod.txt
 export SUPABASE_URL=...
 export SUPABASE_ANON_KEY=...
 export SUPABASE_SERVICE_ROLE_KEY=...   # optional alternative to anon
@@ -46,7 +46,7 @@ Email the same body with SendGrid (stdin = plain text):
 python Stock/daily_summary.py | python Stock/send_email_sendgrid.py
 ```
 
-Requires `SENDGRID_API_KEY`, `EMAIL_TO`, `EMAIL_FROM`. On failure the sender prints a short message to **stderr** and exits non-zero.
+Requires `SENDGRID_API_KEY`, `EMAIL_TO`, `EMAIL_FROM`. Use **comma- or semicolon-separated** addresses in `EMAIL_TO` for multiple recipients (one GitHub secret). On failure the sender prints a short message to **stderr** and exits non-zero.
 
 **GitHub Actions** does not read `.env`; configure **repository secrets** and map them to `env` in the workflow.
 
@@ -61,16 +61,20 @@ Add under **Settings → Secrets and variables → Actions**:
 | `SUPABASE_PORTFOLIO_TABLE` | yes |
 | `PORTFOLIO_CASH_USD` | yes (use `0` if cash is only in the table) |
 | `SENDGRID_API_KEY` | yes |
-| `EMAIL_TO` | yes |
+| `EMAIL_TO` | yes (multiple: `a@x.com,b@y.com`) |
 | `EMAIL_FROM` | yes (verified sender in SendGrid) |
 | `GEMINI_API_KEY` | no |
 
-Workflow file: `.github/workflows/daily_summary.yml`. It runs on a daily UTC schedule (after US market close; see comments in the file), supports **Run workflow** manually, installs `Code/requirements-prod.txt`, and skips sending if a **per-day cache marker** already exists (no duplicate email for the same New York calendar date).
+Everything for the daily email lives under **`Stock/`**: `main.py`, `daily_summary.py`, `send_email_sendgrid.py`, `requirements-prod.txt`, and **`Stock/.github/workflows/main.yml`**.
+
+GitHub only runs workflows from **the repository root** `.github/workflows/`. If you publish **only** the `Stock` folder as its own repo, that workflow path is already correct. If your GitHub repo root is **`Code/`** or the whole monorepo, copy `Stock/.github/workflows/main.yml` to **`<repo-root>/.github/workflows/`** and edit the YAML: use `pip install -r Code/Stock/requirements-prod.txt` (or `Stock/requirements-prod.txt` if root is `Code/`) and add `working-directory: Code/Stock` (or `Stock`) on the “Generate summary” step.
+
+The workflow runs on a daily UTC schedule (after US market close; see comments in the file), supports **Run workflow** manually, and skips sending if a **per-day cache marker** already exists.
 
 ### Dependencies
 
-- `requirements.txt` — dev/API (includes FastAPI, uvicorn, pytest, etc.).
-- `requirements-prod.txt` — minimal set for `Stock/daily_summary.py` only (**no FastAPI**; `main.py` treats FastAPI as optional).
+- `requirements.txt` (under `Code/`) — dev/API (includes FastAPI, uvicorn, pytest, etc.).
+- `Stock/requirements-prod.txt` — minimal set for `daily_summary.py` only (**no FastAPI**; `main.py` treats FastAPI as optional).
 
 ---
 
