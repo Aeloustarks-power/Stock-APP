@@ -22,6 +22,10 @@ def main() -> int:
     if not text:
         text = stock_main.rules_only_summary_from_policy(result.get("policy_report") or {})
 
+    appendix = stock_main.rich_policy_appendix(result.get("policy_report") or {})
+    if appendix.strip():
+        text = text.rstrip() + "\n\n" + appendix.rstrip()
+
     sys.stdout.write(text)
     if not text.endswith("\n"):
         sys.stdout.write("\n")
