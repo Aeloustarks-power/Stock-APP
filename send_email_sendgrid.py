@@ -20,11 +20,22 @@ def _ny_today_iso() -> str:
     return datetime.now(tz).strftime("%Y-%m-%d")
 
 
+def _parse_recipients(raw: str) -> list[dict[str, str]]:
+    """Split EMAIL_TO on commas/semicolons; trim; drop empties."""
+    parts = raw.replace(";", ",").split(",")
+    out: list[dict[str, str]] = []
+    for p in parts:
+        e = p.strip()
+        if e:
+            out.append({"email": e})
+    return out
+
+
 def main() -> int:
     api_key = os.getenv("SENDGRID_API_KEY", "").strip()
-    to_addr = os.getenv("EMAIL_TO", "").strip()
+    to_addrs = _parse_recipients(os.getenv("EMAIL_TO", ""))
     from_addr = os.getenv("EMAIL_FROM", "").strip()
-    if not api_key or not to_addr or not from_addr:
+    if not api_key or not to_addrs or not from_addr:
         sys.stderr.write("SendGrid: missing SENDGRID_API_KEY, EMAIL_TO, or EMAIL_FROM.\n")
         return 1
 
@@ -37,7 +48,7 @@ def main() -> int:
     subject = f"Daily Portfolio Summary - {date_s}"
 
     payload = {
-        "personalizations": [{"to": [{"email": to_addr}]}],
+        "personalizations": [{"to": to_addrs}],
         "from": {"email": from_addr},
         "subject": subject,
         "content": [{"type": "text/plain", "value": body}],
