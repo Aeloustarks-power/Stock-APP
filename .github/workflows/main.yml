@@ -3,13 +3,13 @@ name: Daily portfolio summary
 
 on:
   schedule:
-    # Target: 10:30 Mon–Fri in Australia/Melbourne (weekday mornings).
+    # Target: 22:30 (10:30 PM) Mon–Fri Australia/Melbourne (weekday nights).
     # GitHub cron is UTC-only. During AEDT (Melbourne UTC+11, ~first Sun Oct → first Sun Apr):
-    #   Sun–Thu 23:30 UTC → Mon–Fri 10:30 Melbourne.
-    # When Melbourne is on AEST (UTC+10, ~Apr–Oct), switch this line to:
-    #   cron: "30 0 * * 1-5"
-    # (Mon–Fri 00:30 UTC = 10:30 Melbourne AEST). Swap twice a year or accept ~1h drift.
-    - cron: "30 23 * * 0-4"
+    #   Mon–Fri 11:30 UTC → Mon–Fri 22:30 Melbourne.
+    # When Melbourne is on AEST (UTC+10, ~Apr–Oct), switch to:
+    #   cron: "30 12 * * 1-5"
+    # (Mon–Fri 12:30 UTC = 22:30 Melbourne AEST). Swap at DST or accept ~1h drift.
+    - cron: "30 11 * * 1-5"
   workflow_dispatch: {}
 
 concurrency:
