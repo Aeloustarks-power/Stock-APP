@@ -306,6 +306,58 @@ def calculate_rsi(close_series, window: int = 14):
     return 100 - (100 / (1 + rs))
 
 
+def _stock_quote_payload(symbol: str) -> Dict[str, Any]:
+    sym = _normalize_symbol(symbol)
+    if yf is None:  # pragma: no cover
+        raise RuntimeError("yfinance is not installed")
+
+    hist = yf.Ticker(sym).history(period="60d", auto_adjust=True)
+    if "Close" not in hist:
+        raise ValueError("No price history available")
+
+    close_series = hist["Close"].dropna()
+    if close_series.shape[0] < 20:
+        raise ValueError("Not enough historical data")
+
+    current_price = float(close_series.iloc[-1])
+    ma20_series = close_series.rolling(window=20).mean().dropna()
+    if ma20_series.empty:
+        raise ValueError("Unable to compute MA20")
+    ma20 = float(ma20_series.iloc[-1])
+
+    rsi_series = calculate_rsi(close_series).dropna()
+    if rsi_series.empty:
+        raise ValueError("Unable to compute RSI")
+    rsi = float(rsi_series.iloc[-1])
+
+    daily_change_pct = None
+    daily_change = None
+    if close_series.shape[0] >= 2:
+        prev = float(close_series.iloc[-2])
+        if prev != 0:
+            daily_change = current_price - prev
+            daily_change_pct = (daily_change / prev) * 100
+
+    if rsi < 35:
+        advice = "BUY - Market is Oversold (Fearful)"
+    elif rsi > 65:
+        advice = "SELL - Market is Overbought (Euphoric)"
+    elif current_price > ma20:
+        advice = "HOLD - Upward Trend"
+    else:
+        advice = "HOLD - Downward Trend"
+
+    return {
+        "symbol": sym,
+        "price": round(current_price, 2),
+        "ma20": round(ma20, 2),
+        "rsi": round(rsi, 2),
+        "advice": advice,
+        "regularMarketChangePercent": None if daily_change_pct is None else round(daily_change_pct, 4),
+        "regularMarketChange": None if daily_change is None else round(daily_change, 4),
+    }
+
+
 def _cache_get(cache: Dict[str, Any], key: str, ttl_seconds: int) -> Optional[Any]:
     now = time.time()
     item = cache.get(key)
@@ -842,8 +894,8 @@ def _build_ai_prompt(policy_report: Dict[str, Any]) -> str:
     if q_close is not None and s_close is not None:
         bench = f"- QQQ last ${q_close}, SPY last ${s_close}"
 
-    return f"""You are a portfolio assistant. Use ONLY the numbers and tickers below. Do NOT invent prices, tickers, or metrics.
-You may restate rules and triggers; do NOT introduce new tickers, thresholds, or calculations.
+    return f"""You are a portfolio assistant. Use the numbers and tickers below for portfolio-specific commentary; do NOT fabricate metrics.
+Only in the final watchlist line may you mention 1–2 additional well-known U.S. tickers (not already listed) if you justify them with a brief macro catalyst—never invent exact prices.
 
 Policy:
 - Cash floor: {constraints.get('cash_floor_pct', 0.15)*100:.0f}% (do not recommend buys that drop below it)
@@ -898,6 +950,7 @@ Output format (numbered lines, no markdown tables):
 12) Sectors: 1–2 lines on mix (or note if sector data is mostly Unknown).
 13) Risks / data: one line (warnings or "none").
 14) Optional: one line on RSI/MA20 for a top holding if notable (numbers from the list only).
+15) Watchlist: "Ticker — theme" for 1–2 potential buys outside the current portfolio, justified by macro/sector context (no fabricated prices).
 Keep total under ~22 short lines; stay factual.
 """
 
@@ -1230,6 +1283,17 @@ def create_app() -> FastAPI:
 
     class PortfolioResponse(BaseModel):
         items: List[Dict[str, Any]]
+
+    @app.get("/api/stock/{symbol}")
+    async def get_stock_quote(symbol: str):
+        try:
+            return _stock_quote_payload(symbol)
+        except ValueError as e:
+            raise HTTPException(status_code=404, detail=str(e)) from e
+        except RuntimeError as e:
+            raise HTTPException(status_code=500, detail=str(e)) from e
+        except Exception as e:
+            raise HTTPException(status_code=500, detail="Failed to load quote") from e
 
     @app.get("/api/portfolio", response_model=PortfolioResponse)
     async def list_portfolio():
