@@ -1020,6 +1020,273 @@ def rules_only_summary_from_policy(policy_report: Dict[str, Any]) -> str:
     return "\n".join(parts)
 
 
+def rules_full_summary_from_policy(policy_report: Dict[str, Any]) -> str:
+    """
+    Deterministic 15-part summary matching the AI prompt's numbered-line format.
+    This is used as a fallback when Gemini output is unavailable.
+    """
+    policy = policy_report.get("policy") or {}
+    actions = list(policy.get("recommended_actions") or [])[:3]
+    qqq = policy_report.get("qqq") or {}
+    spy = policy_report.get("spy") or {}
+    combined = int(policy_report.get("combined_dip_level", 0))
+    why_list = list(policy_report.get("why_no_other_actions") or [])
+    unc_list = list(policy_report.get("uncertainty_notes") or [])
+    warnings = list(policy_report.get("warnings") or [])
+    totals = policy.get("totals") or {}
+    constraints = policy.get("constraints") or {}
+    positions = list(policy_report.get("positions") or [])
+    sectors = list(policy_report.get("sector_breakdown") or [])
+
+    cash_floor_pct = float(constraints.get("cash_floor_pct", 0.15))
+    has_actions = len(actions) > 0
+    data_issues = bool(qqq.get("error") or spy.get("error") or warnings)
+    if has_actions:
+        status = "Action"
+    elif data_issues:
+        status = "Attention"
+    else:
+        status = "OK"
+
+    q_l = int(qqq.get("dip_level", 0))
+    s_l = int(spy.get("dip_level", 0))
+    market_body = f"Combined dip L{combined} (max of QQQ L{q_l} and SPY L{s_l})."
+
+    cash_pct = float(totals.get("cash_pct", 0.0))
+    cash_body = (
+        f"${totals.get('cash_usd', 0):.2f} ({cash_pct:.2f}%); "
+        f"floor {cash_floor_pct*100:.0f}%; "
+        f"gap ${totals.get('cash_needed_usd', 0):.2f}; excess ${totals.get('excess_cash_usd', 0):.2f}."
+    )
+
+    def fmt_action(a: Dict[str, Any]) -> str:
+        sym = a.get("symbol", "?")
+        typ = str(a.get("type", "?"))
+        usd = a.get("trade_usd", 0)
+        sh = a.get("approx_shares", 0)
+        rule = a.get("rule_trigger", "n/a")
+        return f"{sym} — {typ} — ${usd} — ~{sh} sh — (Rule: {rule})"
+
+    action_lines = [fmt_action(a) for a in actions]
+    while len(action_lines) < 3:
+        action_lines.append("(none)")
+
+    why_text = why_list[0] if why_list else "No additional rule triggers apply."
+    unc_text = unc_list[0] if unc_list else "Data looks complete; monitoring only."
+    disclaimer = "Not financial advice; rules are heuristic."
+
+    total_value = float(totals.get("total_value", 0.0))
+    deploy_budget = float(totals.get("deploy_budget_usd", 0.0))
+    top_weight = 0.0
+    top_sym = "n/a"
+    if positions:
+        top = max(positions, key=lambda p: _safe_float(p.get("weight_pct"), 0.0))
+        top_weight = _safe_float(top.get("weight_pct"), 0.0)
+        top_sym = str(top.get("symbol", "n/a"))
+    portfolio_line = (
+        f"Total ${total_value:,.0f}; deploy budget ${deploy_budget:,.0f}; "
+        f"largest concentration {top_sym} {top_weight:.2f}%."
+    )
+
+    top_holdings = sorted(positions, key=lambda p: -_safe_float(p.get("weight_pct"), 0.0))[:4]
+    holding_lines = []
+    for p in top_holdings:
+        sym = p.get("symbol", "?")
+        w = _safe_float(p.get("weight_pct"), 0.0)
+        pnl = _safe_float(p.get("pnl"), 0.0)
+        holding_lines.append(f"{sym} {w:.2f}% (P/L ${pnl:+,.0f})")
+    while len(holding_lines) < 2:
+        holding_lines.append("(none)")
+
+    sector_sorted = sorted(sectors, key=lambda s: -_safe_float(s.get("weight_pct"), 0.0))
+    sector_lines = []
+    for s in sector_sorted[:2]:
+        sector_lines.append(f"{s.get('sector', '?')}: {float(s.get('weight_pct', 0.0)):.1f}%")
+    if not sector_lines:
+        sector_lines = ["Unknown / not grouped."]
+
+    warn_line = warnings[0] if warnings else "none"
+
+    rsi_line = "(none)"
+    if top_holdings:
+        p = top_holdings[0]
+        sym = p.get("symbol", "?")
+        rsi = _safe_float(p.get("rsi"), 0.0)
+        px = _safe_float(p.get("current_price"), 0.0)
+        ma = _safe_float(p.get("ma20"), 0.0)
+        vs = "above" if px >= ma else "below"
+        if rsi > 0 and ma > 0:
+            rsi_line = f"{sym}: RSI {rsi:.0f}, {vs} MA20."
+
+    parts = [
+        f"1) Status: {status}.",
+        f"2) Market: {market_body}",
+        f"3) Cash: {cash_body}",
+        f"4) Actions: {action_lines[0]}",
+        f"5) Actions: {action_lines[1]}",
+        f"6) Actions: {action_lines[2]}",
+        f"7) Why: {why_text}",
+        f"8) Uncertainty: {unc_text}",
+        f"9) Disclaimer: {disclaimer}",
+        f"10) Portfolio: {portfolio_line}",
+        f"11) Holdings: {holding_lines[0]}",
+        f"12) Holdings: {holding_lines[1]}",
+        f"13) Sectors: {sector_lines[0]}",
+        f"14) Risks / data: {warn_line}",
+        "15) Watchlist: (none)",
+    ]
+    return "\n".join(parts)
+
+
+def rules_only_full_summary_from_policy(policy_report: Dict[str, Any]) -> str:
+    """
+    Deterministic 15-part summary matching the Gemini prompt format (rules-only).
+    Used as a fallback when AI summary is unavailable (e.g., missing GEMINI_API_KEY).
+    """
+    policy = policy_report.get("policy") or {}
+    actions_all = list(policy.get("recommended_actions") or [])
+    actions = actions_all[:3]
+    qqq = policy_report.get("qqq") or {}
+    spy = policy_report.get("spy") or {}
+    combined = int(policy_report.get("combined_dip_level", 0))
+    why_list = list(policy_report.get("why_no_other_actions") or [])
+    unc_list = list(policy_report.get("uncertainty_notes") or [])
+    warnings = list(policy_report.get("warnings") or [])
+    totals = policy.get("totals") or {}
+    constraints = policy.get("constraints") or {}
+    positions = list(policy_report.get("positions") or [])
+    sectors = list(policy_report.get("sector_breakdown") or [])
+
+    cash_floor_pct = float(constraints.get("cash_floor_pct", 0.15))
+    has_actions = len(actions) > 0
+    data_issues = bool(qqq.get("error") or spy.get("error") or warnings)
+    if has_actions:
+        status = "Action"
+    elif data_issues:
+        status = "Attention"
+    else:
+        status = "OK"
+
+    q_l = int(qqq.get("dip_level", 0))
+    s_l = int(spy.get("dip_level", 0))
+    market_body = (
+        f"Combined dip L{combined} (max of QQQ L{q_l} and SPY L{s_l}); "
+        f"QQQ 6M/12M DD {qqq.get('drawdown_6m_pct', 0):.2f}% / {qqq.get('drawdown_12m_pct', 0):.2f}%; "
+        f"SPY 6M/12M DD {spy.get('drawdown_6m_pct', 0):.2f}% / {spy.get('drawdown_12m_pct', 0):.2f}%."
+    )
+
+    cash_pct = float(totals.get("cash_pct", 0.0) or 0.0)
+    cash_needed = float(totals.get("cash_needed_usd", 0.0) or 0.0)
+    excess_cash = float(totals.get("excess_cash_usd", 0.0) or 0.0)
+    cash_detail = ""
+    if cash_needed > 0:
+        cash_detail = f" Shortfall vs floor: ${cash_needed:,.0f}."
+    elif excess_cash > 0:
+        cash_detail = f" Excess above floor: ${excess_cash:,.0f}."
+    cash_body = (
+        f"${totals.get('cash_usd', 0):.2f} ({cash_pct:.2f}% of portfolio); "
+        f"floor {cash_floor_pct*100:.0f}% of portfolio.{cash_detail}"
+    )
+
+    action_lines: List[str] = []
+    for a in actions:
+        sym = a.get("symbol", "?")
+        typ = str(a.get("type", "?"))
+        usd = a.get("trade_usd", 0)
+        sh = a.get("approx_shares", 0)
+        rule = a.get("rule_trigger", "n/a")
+        action_lines.append(f"{sym} — {typ} — ${usd} — ~{sh} sh — (Rule: {rule})")
+    while len(action_lines) < 3:
+        action_lines.append("(none)")
+
+    why_text = why_list[0] if why_list else "No additional rule triggers apply."
+    unc_text = unc_list[0] if unc_list else "Data looks complete; monitoring only."
+    disclaimer = "Not financial advice; rules are heuristic."
+
+    total_value = float(totals.get("total_value", 0.0) or 0.0)
+    deploy_budget = float(totals.get("deploy_budget_usd", 0.0) or 0.0)
+    invested = float(totals.get("total_invested", 0.0) or 0.0)
+    holdings_count = int(policy.get("holdings_count", len({p.get('symbol') for p in positions}) or 0))
+    max_holdings = int(constraints.get("max_holdings", 18))
+
+    # Largest concentration heuristic: use top weight_pct when available
+    top_w = 0.0
+    top_sym = ""
+    for p in positions:
+        w = _safe_float(p.get("weight_pct"), 0.0)
+        if w > top_w:
+            top_w = w
+            top_sym = str(p.get("symbol") or "").strip()
+
+    port_line = f"Value ${total_value:,.0f}; deploy budget ${deploy_budget:,.0f}; invested ${invested:,.0f}."
+    if top_sym and top_w > 0:
+        port_line += f" Largest weight {top_sym} at {top_w:.1f}%."
+
+    # Holdings narrative: 2–4 short lines on top names by weight
+    pos_sorted = sorted(positions, key=lambda p: -_safe_float(p.get("weight_pct"), 0.0))
+    hold_lines: List[str] = []
+    for p in pos_sorted[:4]:
+        sym = p.get("symbol", "?")
+        w = _safe_float(p.get("weight_pct"), 0.0)
+        pnl = _safe_float(p.get("pnl"), 0.0)
+        rsi = _safe_float(p.get("rsi"), 0.0)
+        px = _safe_float(p.get("current_price"), 0.0)
+        ma = _safe_float(p.get("ma20"), 0.0)
+        vs = "above" if px >= ma else "below"
+        hold_lines.append(f"{sym}: {w:.1f}% weight, P/L ${pnl:+,.0f}, RSI {rsi:.0f}, {vs} MA20.")
+    if not hold_lines:
+        hold_lines = ["(none)"]
+
+    # Sectors: 1–2 lines
+    sec_lines: List[str] = []
+    for s in sectors[:2]:
+        sec = s.get("sector", "?")
+        pct = _safe_float(s.get("weight_pct"), 0.0)
+        sec_lines.append(f"{sec}: {pct:.1f}%.")
+    if not sec_lines:
+        sec_lines = ["Sector data mostly Unknown."]
+
+    risk_line = "Warnings: " + (warnings[0] if warnings else "none.")
+
+    # Optional RSI/MA20 notable line: use the top holding if its RSI extreme
+    optional_line = "(n/a)"
+    if pos_sorted:
+        p0 = pos_sorted[0]
+        sym0 = p0.get("symbol", "?")
+        rsi0 = _safe_float(p0.get("rsi"), 0.0)
+        px0 = _safe_float(p0.get("current_price"), 0.0)
+        ma0 = _safe_float(p0.get("ma20"), 0.0)
+        if rsi0 <= 35 or rsi0 >= 65:
+            optional_line = f"{sym0}: RSI {rsi0:.0f}; price ${px0:.2f} vs MA20 ${ma0:.2f}."
+
+    # Watchlist: avoid fabricating; deterministic placeholders (no extra tickers)
+    watchlist = "Watchlist: (manual review) — no extra tickers suggested in rules-only mode."
+
+    parts = [
+        f"1) Status: {status}.",
+        f"2) Market: {market_body}",
+        f"3) Cash: {cash_body}",
+        f"4) Actions: {action_lines[0]}",
+        f"5) Actions: {action_lines[1]}",
+        f"6) Actions: {action_lines[2]}",
+        f"7) Why: {why_text}",
+        f"8) Uncertainty: {unc_text}",
+        f"9) Disclaimer: {disclaimer}",
+        f"10) Portfolio: {port_line}",
+        f"11) Holdings: {hold_lines[0]}",
+        f"12) Sectors: {sec_lines[0]}",
+        f"13) Risks / data: {risk_line}",
+        f"14) Optional: {optional_line}",
+        f"15) {watchlist}",
+    ]
+    # Ensure lines 11-12 include remaining holding/sector lines, but keep numbering stable.
+    if len(hold_lines) > 1:
+        parts[10] = parts[10] + " " + " ".join(hold_lines[1:])
+    if len(sec_lines) > 1:
+        parts[11] = parts[11] + " " + " ".join(sec_lines[1:])
+    return "\n".join(parts)
+
+
 def rich_policy_appendix(policy_report: Dict[str, Any]) -> str:
     """Structured snapshot from policy_report (plain lines, no markdown tables). For email/API extras."""
     pol = policy_report.get("policy") or {}

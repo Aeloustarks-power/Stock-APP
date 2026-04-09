@@ -20,7 +20,7 @@ def main() -> int:
 
     text = (result.get("ai_summary") or "").strip()
     if not text:
-        text = stock_main.rules_only_summary_from_policy(result.get("policy_report") or {})
+        text = stock_main.rules_full_summary_from_policy(result.get("policy_report") or {})
 
     appendix = stock_main.rich_policy_appendix(result.get("policy_report") or {})
     if appendix.strip():
