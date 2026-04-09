@@ -20,6 +20,9 @@ def main() -> int:
 
     text = (result.get("ai_summary") or "").strip()
     if not text:
+        ai_err = (result.get("ai_error") or "").strip()
+        if ai_err:
+            sys.stderr.write(f"Gemini summary unavailable; falling back to rules-only summary. Error: {ai_err}\n")
         text = stock_main.rules_full_summary_from_policy(result.get("policy_report") or {})
 
     appendix = stock_main.rich_policy_appendix(result.get("policy_report") or {})
