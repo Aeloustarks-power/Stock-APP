@@ -1,4 +1,9 @@
 # Daily portfolio summary email via Gmail SMTP (same folder as main.py).
+#
+# Multiple portfolios (same From/To): set repository variable PORTFOLIO_ID_LIST
+# to comma-separated ids, e.g. "1,2,5". Each id gets one email.
+# Single portfolio: set secret PORTFOLIO_ID (or a one-item list in PORTFOLIO_ID_LIST).
+# Optional: omit both if your table has only one portfolio (no portfolio_id filter).
 name: Daily portfolio summary
 
 on:
@@ -25,6 +30,8 @@ jobs:
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
       SUPABASE_PORTFOLIO_TABLE: ${{ secrets.SUPABASE_PORTFOLIO_TABLE }}
       PORTFOLIO_CASH_USD: ${{ secrets.PORTFOLIO_CASH_USD }}
+      PORTFOLIO_ID_LIST: ${{ vars.PORTFOLIO_ID_LIST }}
+      PORTFOLIO_ID: ${{ secrets.PORTFOLIO_ID }}
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
       GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
@@ -70,4 +77,21 @@ jobs:
       - name: Generate summary and send email (Gmail SMTP)
         run: |
           set -euo pipefail
-          python daily_summary.py | python send_email_gmail.py
+          send_one() {
+            echo "::notice::Sending daily summary for PORTFOLIO_ID=${PORTFOLIO_ID:-unset}"
+            python daily_summary.py | python send_email_gmail.py
+          }
+          if [ -n "${PORTFOLIO_ID_LIST:-}" ]; then
+            IFS=',' read -r -a _pids <<< "${PORTFOLIO_ID_LIST//[[:space:]]/}"
+            for pid in "${_pids[@]}"; do
+              [ -z "$pid" ] && continue
+              export PORTFOLIO_ID="$pid"
+              send_one
+            done
+          elif [ -n "${PORTFOLIO_ID:-}" ]; then
+            export PORTFOLIO_ID
+            send_one
+          else
+            unset PORTFOLIO_ID || true
+            send_one
+          fi
