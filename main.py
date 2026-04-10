@@ -255,33 +255,26 @@ def _is_cash_symbol(symbol: str) -> bool:
     return _normalize_symbol(symbol) in _CASH_SYMBOLS
 
 
-def _safe_int(x: Any, default: Optional[int] = None) -> Optional[int]:
-    if x is None or x == "":
-        return default
-    try:
-        return int(x)
-    except Exception:
-        return default
-
-
-def _portfolio_id_from_env() -> Optional[int]:
-    """When set, analysis and API default to this portfolio (multi-row portfolios)."""
-    raw = (os.getenv("PORTFOLIO_ID") or "").strip()
-    if not raw:
+def _normalize_portfolio_id_value(v: Any) -> Optional[str]:
+    """String portfolio ids (e.g. 'Eric'); supports numeric ids stored as int/str in DB."""
+    if v is None or v == "":
         return None
-    return _safe_int(raw, None)
+    s = str(v).strip()
+    return s if s else None
 
 
-def _row_matches_portfolio(row: Dict[str, Any], portfolio_id: Optional[int]) -> bool:
+def _portfolio_id_from_env() -> Optional[str]:
+    """When set, analysis and API default to this portfolio (multi-row portfolios)."""
+    return _normalize_portfolio_id_value(os.getenv("PORTFOLIO_ID"))
+
+
+def _row_matches_portfolio(row: Dict[str, Any], portfolio_id: Optional[str]) -> bool:
     if portfolio_id is None:
         return True
-    rid = row.get("portfolio_id")
+    rid = _normalize_portfolio_id_value(row.get("portfolio_id"))
     if rid is None:
         return False
-    try:
-        return int(rid) == portfolio_id
-    except Exception:
-        return False
+    return rid == portfolio_id
 
 
 def _safe_float(x: Any, default: float = 0.0) -> float:
@@ -465,7 +458,7 @@ def _position_52w_high_percentile(history_1y) -> Tuple[float, float, float]:
 def _extract_cash_from_rows(
     rows: List[Dict[str, Any]],
     *,
-    portfolio_id: Optional[int] = None,
+    portfolio_id: Optional[str] = None,
 ) -> Tuple[float, List[Dict[str, Any]]]:
     """
     Supports an optional CASH row inside the same table:
@@ -551,7 +544,7 @@ def _try_persist_portfolio_sector(
     symbol: str,
     sector: str,
     *,
-    portfolio_id: Optional[int] = None,
+    portfolio_id: Optional[str] = None,
 ) -> None:
     """Write sector to Supabase when we learned it from the network (column must exist)."""
     if _bool_env("SUPABASE_SKIP_SECTOR_PERSIST", False):
@@ -1610,14 +1603,14 @@ def create_app() -> FastAPI:
         symbol: str
         shares: float = Field(gt=0)
         cost_basis: float = Field(ge=0)
-        portfolio_id: Optional[int] = None
+        portfolio_id: Optional[str] = None
 
     class PortfolioResponse(BaseModel):
         items: List[Dict[str, Any]]
 
-    def _effective_portfolio_id(payload_pid: Optional[int]) -> Optional[int]:
+    def _effective_portfolio_id(payload_pid: Optional[str]) -> Optional[str]:
         if payload_pid is not None:
-            return int(payload_pid)
+            return _normalize_portfolio_id_value(payload_pid)
         return _portfolio_id_from_env()
 
     @app.get("/api/stock/{symbol}")
@@ -1632,9 +1625,13 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=500, detail="Failed to load quote") from e
 
     @app.get("/api/portfolio", response_model=PortfolioResponse)
-    async def list_portfolio(portfolio_id: Optional[int] = None):
+    async def list_portfolio(portfolio_id: Optional[str] = None):
         sb = require_supabase()
-        pid = portfolio_id if portfolio_id is not None else _portfolio_id_from_env()
+        pid = (
+            _normalize_portfolio_id_value(portfolio_id)
+            if portfolio_id is not None
+            else _portfolio_id_from_env()
+        )
         q = sb.table(portfolio_table).select("*")
         if pid is not None:
             q = q.eq("portfolio_id", pid)
@@ -1658,10 +1655,14 @@ def create_app() -> FastAPI:
         return response.data
 
     @app.delete("/api/portfolio/{symbol}")
-    async def remove_from_portfolio(symbol: str, portfolio_id: Optional[int] = None):
+    async def remove_from_portfolio(symbol: str, portfolio_id: Optional[str] = None):
         sb = require_supabase()
         sym = _normalize_symbol(symbol)
-        pid = portfolio_id if portfolio_id is not None else _portfolio_id_from_env()
+        pid = (
+            _normalize_portfolio_id_value(portfolio_id)
+            if portfolio_id is not None
+            else _portfolio_id_from_env()
+        )
         q = sb.table(portfolio_table).delete().eq("symbol", sym)
         if pid is not None:
             q = q.eq("portfolio_id", pid)

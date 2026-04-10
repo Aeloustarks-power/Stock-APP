@@ -1,7 +1,7 @@
 # Daily portfolio summary email via Gmail SMTP (same folder as main.py).
 #
 # Multiple portfolios (same From/To): set repository variable PORTFOLIO_ID_LIST
-# to comma-separated ids, e.g. "1,2,5". Each id gets one email.
+# to comma-separated ids (no quotes), e.g. 1,2,5 or Eric,Sarah. Each id gets one email.
 # Single portfolio: set secret PORTFOLIO_ID (or a one-item list in PORTFOLIO_ID_LIST).
 # Optional: omit both if your table has only one portfolio (no portfolio_id filter).
 name: Daily portfolio summary

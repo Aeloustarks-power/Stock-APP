@@ -4,6 +4,30 @@ import unittest
 import main
 
 
+class TestPortfolioIdNormalization(unittest.TestCase):
+    def test_row_matches_string_portfolio_id(self):
+        self.assertTrue(
+            main._row_matches_portfolio(
+                {"portfolio_id": "Eric", "symbol": "NVDA"},
+                "Eric",
+            )
+        )
+        self.assertFalse(
+            main._row_matches_portfolio(
+                {"portfolio_id": "Other", "symbol": "NVDA"},
+                "Eric",
+            )
+        )
+
+    def test_row_matches_numeric_id_as_string(self):
+        self.assertTrue(
+            main._row_matches_portfolio(
+                {"portfolio_id": 1, "symbol": "NVDA"},
+                "1",
+            )
+        )
+
+
 class TestRulesFullSummaryFallback(unittest.TestCase):
     def test_rules_full_summary_is_15_numbered_lines(self):
         policy_report = {
