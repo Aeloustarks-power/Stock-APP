@@ -248,6 +248,42 @@ def _normalize_symbol(symbol: str) -> str:
     return s
 
 
+_CASH_SYMBOLS: Tuple[str, ...] = ("CASH", "USD", "USD-CASH", "USDCASH")
+
+
+def _is_cash_symbol(symbol: str) -> bool:
+    return _normalize_symbol(symbol) in _CASH_SYMBOLS
+
+
+def _safe_int(x: Any, default: Optional[int] = None) -> Optional[int]:
+    if x is None or x == "":
+        return default
+    try:
+        return int(x)
+    except Exception:
+        return default
+
+
+def _portfolio_id_from_env() -> Optional[int]:
+    """When set, analysis and API default to this portfolio (multi-row portfolios)."""
+    raw = (os.getenv("PORTFOLIO_ID") or "").strip()
+    if not raw:
+        return None
+    return _safe_int(raw, None)
+
+
+def _row_matches_portfolio(row: Dict[str, Any], portfolio_id: Optional[int]) -> bool:
+    if portfolio_id is None:
+        return True
+    rid = row.get("portfolio_id")
+    if rid is None:
+        return False
+    try:
+        return int(rid) == portfolio_id
+    except Exception:
+        return False
+
+
 def _safe_float(x: Any, default: float = 0.0) -> float:
     try:
         return float(x)
@@ -426,17 +462,24 @@ def _position_52w_high_percentile(history_1y) -> Tuple[float, float, float]:
     return pctile, close, high
 
 
-def _extract_cash_from_rows(rows: List[Dict[str, Any]]) -> Tuple[float, List[Dict[str, Any]]]:
+def _extract_cash_from_rows(
+    rows: List[Dict[str, Any]],
+    *,
+    portfolio_id: Optional[int] = None,
+) -> Tuple[float, List[Dict[str, Any]]]:
     """
     Supports an optional CASH row inside the same table:
       - symbol == CASH or USD treated as cash balance in 'shares' (USD).
-    Otherwise uses PORTFOLIO_CASH_USD env var (default 0).
+    When portfolio_id is set, only rows with matching portfolio_id are used (multi-tenant).
+    If no cash rows contribute a positive total, falls back to PORTFOLIO_CASH_USD env (default 0).
     """
     cash = 0.0
     keep: List[Dict[str, Any]] = []
     for r in rows:
+        if not _row_matches_portfolio(r, portfolio_id):
+            continue
         sym = _normalize_symbol(str(r.get("symbol", "")))
-        if sym in {"CASH", "USD", "USD-CASH", "USDCASH"}:
+        if _is_cash_symbol(sym):
             cash += _safe_float(r.get("shares", 0.0), 0.0)
             continue
         keep.append(r)
@@ -502,14 +545,24 @@ def _yfinance_sector_label(symbol: str) -> str:
         return "Unknown"
 
 
-def _try_persist_portfolio_sector(sb: Any, portfolio_table: str, symbol: str, sector: str) -> None:
+def _try_persist_portfolio_sector(
+    sb: Any,
+    portfolio_table: str,
+    symbol: str,
+    sector: str,
+    *,
+    portfolio_id: Optional[int] = None,
+) -> None:
     """Write sector to Supabase when we learned it from the network (column must exist)."""
     if _bool_env("SUPABASE_SKIP_SECTOR_PERSIST", False):
         return
     if not sector or sector == "Unknown":
         return
     try:
-        sb.table(portfolio_table).update({"sector": sector}).eq("symbol", symbol).execute()
+        q = sb.table(portfolio_table).update({"sector": sector}).eq("symbol", symbol)
+        if portfolio_id is not None:
+            q = q.eq("portfolio_id", portfolio_id)
+        q.execute()
     except Exception:
         pass
 
@@ -1366,12 +1419,20 @@ def run_portfolio_analysis() -> Dict[str, Any]:
     cfg = load_policy_config_from_env()
     gemini = _create_gemini_client()
     portfolio_table = os.getenv("SUPABASE_PORTFOLIO_TABLE", "portfolio")
+    portfolio_id = _portfolio_id_from_env()
 
     rows = sb.table(portfolio_table).select("*").execute().data or []
     if not rows:
         raise ValueError("Portfolio is empty.")
 
-    cash_usd, holding_rows = _extract_cash_from_rows(rows)
+    if portfolio_id is not None:
+        rows = [r for r in rows if _row_matches_portfolio(r, portfolio_id)]
+        if not rows:
+            raise ValueError(
+                f"No rows for portfolio_id={portfolio_id}. Check PORTFOLIO_ID or table data."
+            )
+
+    cash_usd, holding_rows = _extract_cash_from_rows(rows, portfolio_id=portfolio_id)
     if not holding_rows:
         raise ValueError("No stock holdings found (only cash row?).")
 
@@ -1392,7 +1453,9 @@ def run_portfolio_analysis() -> Dict[str, Any]:
                 label = _yfinance_sector_label(sym)
                 pos["sector"] = label
                 if label != "Unknown":
-                    _try_persist_portfolio_sector(sb, portfolio_table, sym, label)
+                    _try_persist_portfolio_sector(
+                        sb, portfolio_table, sym, label, portfolio_id=portfolio_id
+                    )
             positions.append(pos)
         except Exception as e:
             warnings.append(f"{row.get('symbol')}: data error — {str(e)}")
@@ -1546,10 +1609,16 @@ def create_app() -> FastAPI:
     class PortfolioPayload(BaseModel):
         symbol: str
         shares: float = Field(gt=0)
-        cost_basis: float = Field(gt=0)
+        cost_basis: float = Field(ge=0)
+        portfolio_id: Optional[int] = None
 
     class PortfolioResponse(BaseModel):
         items: List[Dict[str, Any]]
+
+    def _effective_portfolio_id(payload_pid: Optional[int]) -> Optional[int]:
+        if payload_pid is not None:
+            return int(payload_pid)
+        return _portfolio_id_from_env()
 
     @app.get("/api/stock/{symbol}")
     async def get_stock_quote(symbol: str):
@@ -1563,25 +1632,40 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=500, detail="Failed to load quote") from e
 
     @app.get("/api/portfolio", response_model=PortfolioResponse)
-    async def list_portfolio():
+    async def list_portfolio(portfolio_id: Optional[int] = None):
         sb = require_supabase()
-        response = sb.table(portfolio_table).select("*").order("symbol").execute()
+        pid = portfolio_id if portfolio_id is not None else _portfolio_id_from_env()
+        q = sb.table(portfolio_table).select("*")
+        if pid is not None:
+            q = q.eq("portfolio_id", pid)
+        response = q.order("symbol").execute()
         return {"items": response.data or []}
 
     @app.post("/api/portfolio")
     async def add_to_portfolio(payload: PortfolioPayload):
         sb = require_supabase()
         symbol = _normalize_symbol(payload.symbol)
-        response = sb.table(portfolio_table).upsert(
-            {"symbol": symbol, "shares": payload.shares, "cost_basis": payload.cost_basis},
-            on_conflict="symbol",
-        ).execute()
+        pid = _effective_portfolio_id(payload.portfolio_id)
+        row: Dict[str, Any] = {
+            "symbol": symbol,
+            "shares": payload.shares,
+            "cost_basis": payload.cost_basis,
+        }
+        if pid is not None:
+            row["portfolio_id"] = pid
+        on_conflict = os.getenv("SUPABASE_PORTFOLIO_ON_CONFLICT", "portfolio_id,symbol")
+        response = sb.table(portfolio_table).upsert(row, on_conflict=on_conflict).execute()
         return response.data
 
     @app.delete("/api/portfolio/{symbol}")
-    async def remove_from_portfolio(symbol: str):
+    async def remove_from_portfolio(symbol: str, portfolio_id: Optional[int] = None):
         sb = require_supabase()
-        sb.table(portfolio_table).delete().eq("symbol", _normalize_symbol(symbol)).execute()
+        sym = _normalize_symbol(symbol)
+        pid = portfolio_id if portfolio_id is not None else _portfolio_id_from_env()
+        q = sb.table(portfolio_table).delete().eq("symbol", sym)
+        if pid is not None:
+            q = q.eq("portfolio_id", pid)
+        q.execute()
         return {"status": "deleted"}
 
     @app.post("/api/analyze-portfolio")
