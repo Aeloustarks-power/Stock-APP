@@ -1,10 +1,14 @@
+# Prefer the repo-root netlify.toml.
+# If Netlify base directory is set to "frontend", this file is used instead —
+# do NOT set base here or builds look for frontend/frontend.
 [build]
-  base = "frontend"
   command = "npm ci && npm run build"
   publish = "dist"
 
 [build.environment]
   NODE_VERSION = "22"
 
-# Set VITE_API_BASE in Netlify UI to your Render API URL, e.g.
-# https://us-stock-api.onrender.com
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200

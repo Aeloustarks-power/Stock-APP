@@ -52,9 +52,10 @@ Optional: keep warm with a free cron ping to `/api/snapshots` every 10–14 minu
 1. Go to [https://app.netlify.com](https://app.netlify.com) → **Sign up** with GitHub.
 2. **Add new site** → **Import an existing project** → pick the repo.
 3. Build settings (also in `frontend/netlify.toml`):
-   - **Base directory:** `frontend`
+   - **Base directory:** `frontend` (or leave blank if using root `netlify.toml`)
    - **Build command:** `npm ci && npm run build`
    - **Publish directory:** `dist`
+   - Repo includes root `netlify.toml`; avoid setting base both in UI and inside `frontend/netlify.toml`
 4. Site settings → **Environment variables**:
    - `VITE_API_BASE` = `https://YOUR-API.onrender.com` (no trailing slash)
 5. Deploy. Open the Netlify URL.
