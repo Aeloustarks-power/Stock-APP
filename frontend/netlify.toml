@@ -1,0 +1,10 @@
+[build]
+  base = "frontend"
+  command = "npm ci && npm run build"
+  publish = "dist"
+
+[build.environment]
+  NODE_VERSION = "22"
+
+# Set VITE_API_BASE in Netlify UI to your Render API URL, e.g.
+# https://us-stock-api.onrender.com
