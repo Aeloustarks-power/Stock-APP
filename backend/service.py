@@ -1672,7 +1672,8 @@ def rich_policy_appendix(policy_report: Dict[str, Any]) -> str:
 
 def _gemini_model_name() -> str:
     return (
-        os.getenv("GEMINI_MODEL", "gemini-3.1-pro-preview") or "gemini-3.1-pro-preview"
+        # Free-tier friendly default. gemini-3.1-pro* is paid-only (quota limit 0 on free).
+        os.getenv("GEMINI_MODEL", "gemini-2.5-flash") or "gemini-2.5-flash"
     ).split("/")[-1]
 
 

@@ -586,7 +586,7 @@ function App() {
                 {!aiTotals && !aiLoading && (
                   <p className="empty">Run Analyze to see totals and sector mix.</p>
                 )}
-                {aiLoading && <p className="empty">Crunching numbers with Gemini 3.1 Pro…</p>}
+                {aiLoading && <p className="empty">Crunching numbers with Gemini…</p>}
                 {aiTotals && (
                   <>
                     <div className="stats">
