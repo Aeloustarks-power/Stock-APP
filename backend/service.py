@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import hmac
 import os
 import time
 from collections import defaultdict
@@ -346,11 +348,37 @@ if BaseModel is not object and Field is not None and field_validator is not None
     class PortfolioResponse(BaseModel):
         items: List[Dict[str, Any]]
         cash_usd: float = 0.0
+
+    class LoginPayload(BaseModel):
+        password: str = ""
 else:  # pragma: no cover
     PortfolioPayload = None  # type: ignore[misc, assignment]
     PortfolioHoldingItem = None  # type: ignore[misc, assignment]
     PortfolioReplacePayload = None  # type: ignore[misc, assignment]
     PortfolioResponse = None  # type: ignore[misc, assignment]
+    LoginPayload = None  # type: ignore[misc, assignment]
+
+
+def _site_password() -> str:
+    return (os.getenv("SITE_PASSWORD") or "").strip()
+
+
+def _access_token(password: str) -> str:
+    return hmac.new(
+        password.encode("utf-8"),
+        b"us-stock-sentinel-access",
+        hashlib.sha256,
+    ).hexdigest()
+
+
+def _secrets_match(left: str, right: str) -> bool:
+    """Length-safe comparison (hmac.compare_digest requires equal length)."""
+    if not left or not right:
+        return False
+    return hmac.compare_digest(
+        hashlib.sha256(left.encode("utf-8")).digest(),
+        hashlib.sha256(right.encode("utf-8")).digest(),
+    )
 
 
 def _format_pydantic_request_errors(errors: Any) -> str:
@@ -2121,13 +2149,32 @@ def create_app() -> FastAPI:
         or CORSMiddleware is None
         or Body is None
         or Query is None
+        or Request is None
+        or JSONResponse is None
     ):  # pragma: no cover
         raise RuntimeError("fastapi is not installed")
     app = FastAPI(title="Stock Portfolio Policy API")
+    auth_open_paths = {"/api/auth/login", "/api/auth/status"}
 
+    @app.middleware("http")
+    async def site_password_guard(request: Request, call_next):
+        if request.method == "OPTIONS" or request.url.path in auth_open_paths:
+            return await call_next(request)
+        expected = _site_password()
+        if not expected:
+            return await call_next(request)
+        header = request.headers.get("authorization") or ""
+        token = header[7:].strip() if header.lower().startswith("bearer ") else ""
+        if not token:
+            token = (request.headers.get("x-site-token") or "").strip()
+        if not _secrets_match(token, _access_token(expected)):
+            return JSONResponse(status_code=401, content={"detail": "Password required"})
+        return await call_next(request)
+
+    # CORS must be added last so it wraps 401s from the password guard.
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=os.getenv("CORS_ALLOW_ORIGINS", "*").split(","),
+        allow_origins=[o.strip() for o in os.getenv("CORS_ALLOW_ORIGINS", "*").split(",") if o.strip()],
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -2174,6 +2221,21 @@ def create_app() -> FastAPI:
                 if val is not None:
                     return val
         return _portfolio_id_from_env()
+
+    @app.get("/api/auth/status")
+    async def auth_status():
+        return {"required": bool(_site_password())}
+
+    @app.post("/api/auth/login")
+    async def auth_login(body: LoginPayload = Body(...)):
+        if LoginPayload is None:  # pragma: no cover
+            raise HTTPException(status_code=500, detail="pydantic is not installed")
+        expected = _site_password()
+        if not expected:
+            return {"token": "", "required": False}
+        if not _secrets_match(body.password, expected):
+            raise HTTPException(status_code=401, detail="Wrong password")
+        return {"token": _access_token(expected), "required": True}
 
     @app.get("/api/stock/{symbol}")
     async def get_stock_quote(symbol: str):

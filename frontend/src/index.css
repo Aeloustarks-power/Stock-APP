@@ -533,3 +533,63 @@ button {
     --aside-w: 360px;
   }
 }
+
+.lock-screen {
+  min-height: 100dvh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.lock-card {
+  width: min(100%, 380px);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-top: 3px solid var(--accent);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 22px 20px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.lock-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.lock-brand h1 {
+  margin: 0;
+  font-family: var(--font-brand);
+  font-size: 1.1rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.lock-copy {
+  margin: 0 0 4px;
+  color: var(--ink-muted);
+}
+
+.lock-card label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-muted);
+}
+
+.lock-input {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 9px 10px;
+  background: #fff;
+}
+
+.lock-input:focus {
+  outline: 2px solid rgba(201, 162, 39, 0.45);
+  border-color: var(--accent-deep);
+}

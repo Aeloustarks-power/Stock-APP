@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { BarChart3, ShieldAlert, Plus, Trash2, RefreshCw } from 'lucide-react';
+import { BarChart3, ShieldAlert, Plus, Trash2, RefreshCw, Lock } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import {
   PieChart,
@@ -15,6 +15,36 @@ import {
 } from 'recharts';
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? 'http://localhost:8000';
+const TOKEN_KEY = 'us-stock-site-token';
+
+function getSiteToken() {
+  try {
+    return sessionStorage.getItem(TOKEN_KEY) || '';
+  } catch {
+    return '';
+  }
+}
+
+function setSiteToken(token) {
+  try {
+    if (token) sessionStorage.setItem(TOKEN_KEY, token);
+    else sessionStorage.removeItem(TOKEN_KEY);
+  } catch {
+    // ignore private-mode storage failures
+  }
+}
+
+async function apiFetch(path, options = {}) {
+  const headers = { ...(options.headers || {}) };
+  const token = getSiteToken();
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const response = await fetch(`${API_BASE}${path}`, { ...options, headers });
+  if (response.status === 401) {
+    setSiteToken('');
+    window.dispatchEvent(new Event('site-lock'));
+  }
+  return response;
+}
 const PROFILES = [
   { id: 'Eric', label: 'Eric' },
   { id: 'Vivien', label: 'Vivien' },
@@ -93,6 +123,11 @@ function money(n) {
 }
 
 function App() {
+  const [unlocked, setUnlocked] = useState(false);
+  const [authChecking, setAuthChecking] = useState(true);
+  const [passwordInput, setPasswordInput] = useState('');
+  const [authError, setAuthError] = useState(null);
+  const [authBusy, setAuthBusy] = useState(false);
   const [selectedPortfolio, setSelectedPortfolio] = useState(PROFILES[0].id);
   const [activeTab, setActiveTab] = useState('overview');
   const [rows, setRows] = useState([emptyRow()]);
@@ -122,8 +157,8 @@ function App() {
     setPortfolioLoading(true);
     setPortfolioError(null);
     try {
-      const response = await fetch(
-        `${API_BASE}/api/portfolio?portfolio_id=${encodeURIComponent(selectedPortfolio)}`
+      const response = await apiFetch(
+        `/api/portfolio?portfolio_id=${encodeURIComponent(selectedPortfolio)}`
       );
       if (!response.ok) {
         const errPayload = await response.json().catch(() => ({}));
@@ -150,8 +185,44 @@ function App() {
   }, [selectedPortfolio]);
 
   useEffect(() => {
+    const lock = () => setUnlocked(false);
+    window.addEventListener('site-lock', lock);
+    return () => window.removeEventListener('site-lock', lock);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const statusRes = await fetch(`${API_BASE}/api/auth/status`);
+        const statusData = await statusRes.json().catch(() => ({ required: true }));
+        if (!statusData.required) {
+          if (!cancelled) setUnlocked(true);
+          return;
+        }
+        const token = getSiteToken();
+        if (!token) {
+          if (!cancelled) setUnlocked(false);
+          return;
+        }
+        const probe = await apiFetch('/api/snapshots');
+        if (!cancelled) setUnlocked(probe.ok);
+        if (!probe.ok) setSiteToken('');
+      } catch {
+        if (!cancelled) setUnlocked(false);
+      } finally {
+        if (!cancelled) setAuthChecking(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!unlocked) return;
     fetchPortfolio();
-  }, [fetchPortfolio]);
+  }, [fetchPortfolio, unlocked]);
 
   const updateRow = (id, field, value) => {
     setRows((prev) =>
@@ -218,8 +289,8 @@ function App() {
     setPortfolioSaving(true);
     setError(null);
     try {
-      const response = await fetch(
-        `${API_BASE}/api/portfolio?portfolio_id=${encodeURIComponent(selectedPortfolio)}`,
+      const response = await apiFetch(
+        `/api/portfolio?portfolio_id=${encodeURIComponent(selectedPortfolio)}`,
         {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
@@ -260,7 +331,7 @@ function App() {
     setQuoteLoading(true);
     setError(null);
     try {
-      const response = await fetch(`${API_BASE}/api/stock/${resolvedSymbol.toUpperCase()}`);
+      const response = await apiFetch(`/api/stock/${resolvedSymbol.toUpperCase()}`);
       if (!response.ok) {
         let message = `Request failed (${response.status})`;
         try {
@@ -290,8 +361,8 @@ function App() {
     setSectorBreakdown([]);
     setActiveTab('overview');
     try {
-      const response = await fetch(
-        `${API_BASE}/api/analyze-portfolio?portfolio_id=${encodeURIComponent(selectedPortfolio)}`,
+      const response = await apiFetch(
+        `/api/analyze-portfolio?portfolio_id=${encodeURIComponent(selectedPortfolio)}`,
         { method: 'POST' }
       );
       if (!response.ok) {
@@ -337,8 +408,8 @@ function App() {
     setRefreshingSnapshots(true);
     setError(null);
     try {
-      const response = await fetch(
-        `${API_BASE}/api/snapshots/refresh?portfolio_id=${encodeURIComponent(selectedPortfolio)}`,
+      const response = await apiFetch(
+        `/api/snapshots/refresh?portfolio_id=${encodeURIComponent(selectedPortfolio)}`,
         { method: 'POST' }
       );
       if (!response.ok) {
@@ -402,7 +473,88 @@ function App() {
     ol: ({ children }) => <ol>{children}</ol>,
   };
 
+  const handleUnlock = async (event) => {
+    event.preventDefault();
+    setAuthBusy(true);
+    setAuthError(null);
+    try {
+      const response = await fetch(`${API_BASE}/api/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: passwordInput }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(formatApiErrorDetail(payload?.detail) || 'Wrong password');
+      }
+      if (payload.required === false) {
+        setSiteToken('');
+        setUnlocked(true);
+        setPasswordInput('');
+        return;
+      }
+      if (!payload.token) {
+        throw new Error('Wrong password');
+      }
+      setSiteToken(payload.token);
+      setUnlocked(true);
+      setPasswordInput('');
+    } catch (err) {
+      setAuthError(err.message || 'Wrong password');
+    } finally {
+      setAuthBusy(false);
+    }
+  };
+
+  const handleLock = () => {
+    setSiteToken('');
+    setUnlocked(false);
+    setPasswordInput('');
+    setAuthError(null);
+    setAuthChecking(false);
+  };
+
   const banner = error || portfolioError || aiError;
+
+  if (authChecking || !unlocked) {
+    return (
+      <div className="lock-screen">
+        <form className="lock-card" onSubmit={handleUnlock}>
+          <div className="lock-brand">
+            <BarChart3 size={26} color="#1c1917" />
+            <h1>US Stock Sentinel</h1>
+          </div>
+          {authChecking ? (
+            <p className="empty">Checking access…</p>
+          ) : (
+            <>
+              <p className="lock-copy">Enter the site password to view and edit portfolios.</p>
+              <label htmlFor="site-password">Password</label>
+              <input
+                id="site-password"
+                className="lock-input"
+                type="password"
+                autoComplete="current-password"
+                value={passwordInput}
+                onChange={(e) => setPasswordInput(e.target.value)}
+                autoFocus
+              />
+              {authError && (
+                <div className="banner" role="alert">
+                  <ShieldAlert size={16} />
+                  <span>{authError}</span>
+                </div>
+              )}
+              <button type="submit" className="btn btn-primary" disabled={authBusy || !passwordInput}>
+                <Lock size={14} />
+                {authBusy ? 'Checking…' : 'Unlock'}
+              </button>
+            </>
+          )}
+        </form>
+      </div>
+    );
+  }
 
   return (
     <div className="app-shell">
@@ -483,6 +635,16 @@ function App() {
             disabled={aiLoading || portfolioLoading}
           >
             {aiLoading ? 'Analyzing…' : 'Analyze'}
+          </button>
+
+          <button
+            type="button"
+            className="btn btn-ghost"
+            onClick={handleLock}
+            title="Lock site"
+          >
+            <Lock size={14} />
+            Lock
           </button>
         </div>
       </header>

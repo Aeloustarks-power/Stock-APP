@@ -22,3 +22,5 @@ services:
         sync: false
       - key: SNAPSHOT_TTL_SECONDS
         value: "21600"
+      - key: SITE_PASSWORD
+        sync: false
