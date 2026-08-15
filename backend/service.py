@@ -1215,7 +1215,10 @@ def _build_ai_prompt(policy_report: Dict[str, Any]) -> str:
         bench = f"- QQQ last ${q_close}, SPY last ${s_close}"
 
     return f"""You are a portfolio assistant. Use the numbers and tickers below for portfolio-specific commentary; do NOT fabricate metrics.
-Only in the final watchlist line may you mention 1–2 additional well-known U.S. tickers (not already listed) if you justify them with a brief macro catalyst—never invent exact prices.
+Write EVERY commentary line in bilingual form: English first, then Simplified Chinese on the same numbered item.
+Format each line like: `1) Status: OK / Attention / Action — 状态：正常 / 关注 / 行动`
+Keep ticker symbols (AAPL, QQQ, etc.) in English. Do NOT invent prices or metrics.
+Only in the final watchlist line may you mention 1–2 additional well-known U.S. tickers (not already listed) if you justify them with a brief macro catalyst.
 
 Policy:
 - Cash floor: {constraints.get('cash_floor_pct', 0.15)*100:.0f}% (do not recommend buys that drop below it)
@@ -1255,23 +1258,23 @@ Uncertainty / confidence:
 Data warnings:
 {chr(10).join(f"- {w}" for w in warnings) if warnings else "- (none)"}
 
-Output format (numbered lines, no markdown tables):
-1) Status: OK / Attention / Action.
-2) Market: one line (dip level + brief context; mention QQQ/SPY if useful).
-3) Cash: one line (cash%, floor, excess or shortfall vs floor).
-4) Actions: line 1 — "SYMBOL — ACTION — $ — ~shares — (Rule: ...)" or (none).
-5) Actions: line 2 — same format or (none).
-6) Actions: line 3 — same format or (none).
-7) Why: one line (consolidate "why no other actions").
-8) Uncertainty: one short sentence.
-9) Disclaimer: Not financial advice; rules are heuristic.
-10) Portfolio: one line (size, deploy budget, largest concentration if obvious from the list).
-11) Holdings: 2–4 short lines on top names by weight (symbols from "Top holdings" only).
-12) Sectors: 1–2 lines on mix (or note if sector data is mostly Unknown).
-13) Risks / data: one line (warnings or "none").
-14) Optional: one line on RSI/MA20 for a top holding if notable (numbers from the list only).
-15) Watchlist: "Ticker — theme" for 1–2 potential buys outside the current portfolio, justified by macro/sector context (no fabricated prices).
-Keep total under ~22 short lines; stay factual.
+Output format (numbered lines, no markdown tables; each item MUST include English then 中文):
+1) Status: ...
+2) Market: ...
+3) Cash: ...
+4) Actions: line 1 — "SYMBOL — ACTION — $ — ~shares — (Rule: ...)" or (none)
+5) Actions: line 2 — same format or (none)
+6) Actions: line 3 — same format or (none)
+7) Why: ...
+8) Uncertainty: ...
+9) Disclaimer: Not financial advice; rules are heuristic. — 非投资建议；规则仅为启发式。
+10) Portfolio: ...
+11) Holdings: 2–4 short lines on top names by weight (symbols from "Top holdings" only)
+12) Sectors: 1–2 lines on mix (or note if sector data is mostly Unknown)
+13) Risks / data: ...
+14) Optional: one line on RSI/MA20 for a top holding if notable (numbers from the list only)
+15) Watchlist: "Ticker — theme" for 1–2 potential buys outside the current portfolio (bilingual justification, no fabricated prices)
+Keep total under ~30 short lines; stay factual.
 """
 
 
@@ -1677,7 +1680,29 @@ def _gemini_model_name() -> str:
     ).split("/")[-1]
 
 
-def _build_suggested_buys_prompt(policy_report: Dict[str, Any]) -> str:
+def _ai_output_lang() -> str:
+    """Kept for compatibility. AI output is bilingual (en + zh)."""
+    return "bilingual"
+
+
+def _screen_buy_candidates(
+    policy_report: Dict[str, Any],
+    *,
+    limit: int = 15,
+) -> List[Dict[str, Any]]:
+    """
+    Mechanical Nasdaq-100 shortlist for AI to rank (not invent tickers).
+    Prefer liquid names off 52w highs with positive 1y trend.
+    """
+    positions = list(policy_report.get("positions") or [])
+    held = {_normalize_symbol(str(p.get("symbol", ""))) for p in positions if p.get("symbol")}
+    return _rank_new_candidates(held, limit=limit)
+
+
+def _build_suggested_buys_prompt(
+    policy_report: Dict[str, Any],
+    candidates: List[Dict[str, Any]],
+) -> str:
     pol = policy_report.get("policy") or {}
     totals = pol.get("totals") or {}
     constraints = pol.get("constraints") or {}
@@ -1693,11 +1718,21 @@ def _build_suggested_buys_prompt(policy_report: Dict[str, Any]) -> str:
         f"- {s.get('sector')}: { _safe_float(s.get('weight_pct')):.1f}%"
         for s in sectors[:8]
     ]
+    cand_lines = []
+    for c in candidates:
+        cand_lines.append(
+            f"- {c.get('symbol')}: screen_score={c.get('score')}, "
+            f"dd_from_high={c.get('drawdown_from_52w_high_pct')}%, "
+            f"ret_1y={c.get('return_1y_pct')}%, "
+            f"avg_$vol_30d={c.get('avg_dollar_vol_30d')}"
+        )
     return f"""You are a US equities portfolio research assistant.
-Propose 2-3 NEW liquid US-listed stocks (large/mid cap preferred) that are NOT already held.
+Task: RANK 2-3 tickers ONLY from the screened candidate list below. Do NOT invent tickers outside that list.
+Near-duplicates of holdings are forbidden (e.g. no GOOG if GOOGL is held).
 Use Google Search for recent catalysts (earnings, product, regulation, sector rotation). Do NOT invent prices.
+Every narrative field must be bilingual: provide English AND Simplified Chinese (separate keys).
 
-Already held (do not suggest these or near-duplicates like GOOG if GOOGL held): {', '.join(held) or '(none)'}
+Already held: {', '.join(held) or '(none)'}
 
 Portfolio context:
 - Total value ${ _safe_float(totals.get('total_value')):,.0f}, cash ${ _safe_float(totals.get('cash_usd')):,.0f} ({ _safe_float(totals.get('cash_pct')):.1f}%)
@@ -1711,20 +1746,28 @@ Top holdings:
 Sector mix:
 {chr(10).join(sec_lines) if sec_lines else '- Unknown'}
 
+Screened candidates (CHOOSE ONLY FROM THESE):
+{chr(10).join(cand_lines) if cand_lines else '- (none — return empty suggestions)'}
+
 Return ONLY valid JSON (no markdown fences) with this shape:
 {{
   "suggestions": [
     {{
       "symbol": "TICKER",
-      "thesis": "one sentence",
-      "fit": "why it fits THIS portfolio (gap or diversification)",
-      "catalyst": "recent searchable catalyst",
-      "risk": "key risk",
+      "thesis": "English one sentence",
+      "thesis_zh": "中文一句话",
+      "fit": "English why it fits THIS portfolio",
+      "fit_zh": "中文：为何适合当前组合",
+      "catalyst": "English recent searchable catalyst",
+      "catalyst_zh": "中文近期催化剂",
+      "risk": "English key risk",
+      "risk_zh": "中文主要风险",
       "confidence": 0.0
     }}
   ]
 }}
-confidence is 0-1. Prefer names that fill a sector/theme gap or offer a clear asymmetric catalyst.
+confidence is 0-1. Prefer names that fill a sector/theme gap vs this portfolio, with a real recent catalyst.
+If the candidate list is empty, return {{"suggestions": []}}.
 """
 
 
@@ -1763,11 +1806,15 @@ def _parse_suggested_buys_json(text: str) -> List[Dict[str, Any]]:
             {
                 "symbol": sym,
                 "thesis": str(item.get("thesis") or "").strip(),
+                "thesis_zh": str(item.get("thesis_zh") or "").strip(),
                 "fit": str(item.get("fit") or "").strip(),
+                "fit_zh": str(item.get("fit_zh") or "").strip(),
                 "catalyst": str(item.get("catalyst") or "").strip(),
+                "catalyst_zh": str(item.get("catalyst_zh") or "").strip(),
                 "risk": str(item.get("risk") or "").strip(),
+                "risk_zh": str(item.get("risk_zh") or "").strip(),
                 "confidence": round(min(1.0, max(0.0, _safe_float(item.get("confidence"), 0.5))), 3),
-                "source": "gemini_grounded",
+                "source": "gemini_grounded_screen_rank",
             }
         )
     return out[:3]
@@ -1818,10 +1865,12 @@ def _generate_suggested_buys(gemini: Any, policy_report: Dict[str, Any]) -> Tupl
         for p in (policy_report.get("positions") or [])
         if p.get("symbol")
     }
+    candidates = _screen_buy_candidates(policy_report, limit=15)
+    allowed = {_normalize_symbol(str(c.get("symbol", ""))) for c in candidates if c.get("symbol")}
     try:
         from google.genai import types  # type: ignore
 
-        prompt = _build_suggested_buys_prompt(policy_report)
+        prompt = _build_suggested_buys_prompt(policy_report, candidates)
         model = _gemini_model_name()
         config = types.GenerateContentConfig(
             tools=[types.Tool(google_search=types.GoogleSearch())],
@@ -1831,14 +1880,18 @@ def _generate_suggested_buys(gemini: Any, policy_report: Dict[str, Any]) -> Tupl
             model=model, contents=prompt, config=config
         )
         parsed = _parse_suggested_buys_json(resp.text or "")
+        if allowed:
+            parsed = [s for s in parsed if s.get("symbol") in allowed]
         return _enrich_suggested_buys(parsed, held=held), ""
     except Exception as e:
         # Retry without grounding if tool config fails
         try:
-            prompt = _build_suggested_buys_prompt(policy_report)
+            prompt = _build_suggested_buys_prompt(policy_report, candidates)
             model = _gemini_model_name()
             resp = gemini.models.generate_content(model=model, contents=prompt)
             parsed = _parse_suggested_buys_json(resp.text or "")
+            if allowed:
+                parsed = [s for s in parsed if s.get("symbol") in allowed]
             return _enrich_suggested_buys(parsed, held=held), f"grounding_fallback: {e}"
         except Exception as e2:
             return [], str(e2)

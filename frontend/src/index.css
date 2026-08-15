@@ -441,6 +441,12 @@ button {
   color: var(--ink);
 }
 
+.idea-card p.zh {
+  margin-top: 2px;
+  color: var(--ink);
+  opacity: 0.92;
+}
+
 .ai-md h2,
 .ai-md h3,
 .ai-md h4 {
