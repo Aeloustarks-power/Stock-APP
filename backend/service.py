@@ -1786,6 +1786,108 @@ def run_portfolio_analysis(
     }
 
 
+def run_idea_search(
+    portfolio_id: Optional[str] = None,
+    extra_exclude: Optional[Iterable[str]] = None,
+) -> Dict[str, Any]:
+    """Fresh suggested buys, skipping holdings and extra_exclude (already-shown ideas)."""
+    sb = _create_supabase_client()
+    if not sb:
+        raise RuntimeError(
+            "Supabase is not configured. Set SUPABASE_URL and SUPABASE_ANON_KEY (or SERVICE_ROLE_KEY)."
+        )
+
+    cfg = load_policy_config_from_env()
+    gemini = _create_gemini_client()
+    portfolio_table = os.getenv("SUPABASE_PORTFOLIO_TABLE", "portfolio")
+    resolved_id = (
+        _normalize_portfolio_id_value(portfolio_id)
+        if portfolio_id is not None
+        else _portfolio_id_from_env()
+    )
+
+    rows = sb.table(portfolio_table).select("*").execute().data or []
+    if resolved_id is not None:
+        rows = [r for r in rows if _row_matches_portfolio(r, resolved_id)]
+    if not rows:
+        raise ValueError("Portfolio is empty.")
+
+    cash_usd, holding_rows = _extract_cash_from_rows(rows, portfolio_id=resolved_id)
+    if not holding_rows:
+        raise ValueError("No stock holdings found (only cash row?).")
+
+    need_refresh = [
+        _normalize_symbol(str(r.get("symbol", "")))
+        for r in holding_rows
+        if r.get("symbol") and get_symbol_snapshot(str(r["symbol"])) is None
+    ]
+    if need_refresh:
+        try:
+            refresh_market_snapshots(need_refresh, include_benchmarks=False)
+        except Exception:
+            pass
+
+    positions: List[Dict[str, Any]] = []
+    warnings: List[str] = []
+    for row in holding_rows:
+        try:
+            sym = _normalize_symbol(row["symbol"])
+            pos = _calc_position_metrics_cached(
+                sym,
+                _safe_float(row.get("shares"), 0.0),
+                _safe_float(row.get("cost_basis"), 0.0),
+            )
+            stored_sec = _portfolio_sector_from_row(row)
+            pos["sector"] = stored_sec or _yfinance_sector_label(sym)
+            positions.append(pos)
+        except Exception as e:
+            warnings.append(f"{row.get('symbol')}: data error — {str(e)}")
+
+    if not positions:
+        raise ValueError("No valid positions to screen ideas against.")
+
+    total_invested = sum(_safe_float(p.get("position_value"), 0.0) for p in positions)
+    total_value = max(total_invested + cash_usd, 1e-9)
+    for p in positions:
+        p["weight_pct"] = round(_safe_float(p.get("position_value")) / total_value * 100, 3)
+    sector_breakdown = _sector_breakdown(positions)
+    cash_pct = cash_usd / total_value * 100
+    cash_floor_usd = cfg.cash_floor_pct * total_value
+    policy_report = {
+        "combined_dip_level": 0,
+        "positions": positions,
+        "sector_breakdown": sector_breakdown,
+        "warnings": warnings,
+        "policy": {
+            "holdings_count": len(positions),
+            "max_new_buys": max(0, cfg.max_holdings - len(positions)),
+            "constraints": {
+                "cash_floor_pct": cfg.cash_floor_pct,
+                "max_holdings": cfg.max_holdings,
+            },
+            "totals": {
+                "total_value": round(total_value, 2),
+                "total_invested": round(total_invested, 2),
+                "cash_usd": round(cash_usd, 2),
+                "cash_pct": round(cash_pct, 2),
+                "cash_needed_usd": round(max(0.0, cash_floor_usd - cash_usd), 2),
+                "excess_cash_usd": round(max(0.0, cash_usd - cash_floor_usd), 2),
+                "deploy_budget_usd": round(max(0.0, cash_usd - cash_floor_usd), 2),
+            },
+        },
+    }
+    suggested_buys, suggest_error = _generate_suggested_buys(
+        gemini, policy_report, extra_exclude=extra_exclude or []
+    )
+    return {
+        "suggested_buys": suggested_buys,
+        "suggest_error": suggest_error,
+        "excluded": sorted(
+            {_normalize_symbol(str(s)) for s in (extra_exclude or []) if s}
+        ),
+    }
+
+
 def _create_supabase_client() -> Optional[Client]:
     url = os.getenv("SUPABASE_URL")
     key = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_ANON_KEY")
@@ -2082,6 +2184,21 @@ def create_app() -> FastAPI:
             return run_portfolio_analysis(
                 portfolio_id=portfolio_id, force_live=force_live
             )
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        except RuntimeError as e:
+            raise HTTPException(status_code=500, detail=str(e)) from e
+
+    @app.post("/api/ideas")
+    async def more_ideas(
+        portfolio_id: Optional[str] = Query(None),
+        exclude: Optional[str] = Query(
+            None, description="Comma-separated tickers already shown this session"
+        ),
+    ):
+        extra = [p.strip() for p in (exclude or "").split(",") if p.strip()]
+        try:
+            return run_idea_search(portfolio_id=portfolio_id, extra_exclude=extra)
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
         except RuntimeError as e:

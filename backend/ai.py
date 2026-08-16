@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import os
 import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 try:
     from google import genai  # type: ignore
@@ -173,18 +173,22 @@ def screen_buy_candidates(
     policy_report: Dict[str, Any],
     *,
     limit: int = 15,
+    extra_exclude: Optional[Iterable[str]] = None,
 ) -> List[Dict[str, Any]]:
     """Mechanical Nasdaq-100 shortlist for AI to rank (not invent tickers)."""
     from backend.service import _rank_new_candidates
 
     positions = list(policy_report.get("positions") or [])
     held = {_normalize_symbol(str(p.get("symbol", ""))) for p in positions if p.get("symbol")}
-    return _rank_new_candidates(held, limit=limit)
+    extra = {_normalize_symbol(str(s)) for s in (extra_exclude or []) if s}
+    return _rank_new_candidates(held | extra, limit=limit)
 
 
 def build_suggested_buys_prompt(
     policy_report: Dict[str, Any],
     candidates: List[Dict[str, Any]],
+    *,
+    extra_exclude: Optional[Iterable[str]] = None,
 ) -> str:
     pol = policy_report.get("policy") or {}
     totals = pol.get("totals") or {}
@@ -192,6 +196,13 @@ def build_suggested_buys_prompt(
     positions = list(policy_report.get("positions") or [])
     sectors = list(policy_report.get("sector_breakdown") or [])
     held = sorted({_normalize_symbol(str(p.get("symbol", ""))) for p in positions if p.get("symbol")})
+    skip = sorted(
+        {
+            _normalize_symbol(str(s))
+            for s in (extra_exclude or [])
+            if s and _normalize_symbol(str(s)) not in set(held)
+        }
+    )
     pos_lines = [
         f"- {p.get('symbol')}: weight {_safe_float(p.get('weight_pct')):.1f}%, "
         f"sector {p.get('sector', 'Unknown')}, RSI {_safe_float(p.get('rsi')):.0f}"
@@ -212,10 +223,12 @@ def build_suggested_buys_prompt(
     return f"""You are a US equities portfolio research assistant.
 Task: RANK 2-3 tickers ONLY from the screened candidate list below. Do NOT invent tickers outside that list.
 Near-duplicates of holdings are forbidden (e.g. no GOOG if GOOGL is held).
+Prefer names that fill a sector/theme gap vs this portfolio. If Skip is non-empty, do not repeat those tickers — explore the rest of the candidate list.
 Use Google Search for recent catalysts (earnings, product, regulation, sector rotation). Do NOT invent prices.
 Every narrative field must be bilingual: provide English AND Simplified Chinese (separate keys).
 
 Already held: {', '.join(held) or '(none)'}
+Skip (already shown this session — pick DIFFERENT tickers): {', '.join(skip) or '(none)'}
 
 Portfolio context:
 - Total value ${_safe_float(totals.get('total_value')):,.0f}, cash ${_safe_float(totals.get('cash_usd')):,.0f} ({_safe_float(totals.get('cash_pct')):.1f}%)
@@ -340,7 +353,10 @@ def generate_ai_summary(gemini: Any, policy_report: Dict[str, Any]) -> Tuple[str
 
 
 def generate_suggested_buys(
-    gemini: Any, policy_report: Dict[str, Any]
+    gemini: Any,
+    policy_report: Dict[str, Any],
+    *,
+    extra_exclude: Optional[Iterable[str]] = None,
 ) -> Tuple[List[Dict[str, Any]], str]:
     if not gemini or genai is None:
         return [], "Gemini is not configured (set GEMINI_API_KEY)."
@@ -349,16 +365,22 @@ def generate_suggested_buys(
         for p in (policy_report.get("positions") or [])
         if p.get("symbol")
     }
-    candidates = screen_buy_candidates(policy_report, limit=15)
+    extra = {_normalize_symbol(str(s)) for s in (extra_exclude or []) if s}
+    candidates = screen_buy_candidates(
+        policy_report, limit=25 if extra else 15, extra_exclude=extra
+    )
     allowed = {_normalize_symbol(str(c.get("symbol", ""))) for c in candidates if c.get("symbol")}
+    temperature = 0.55 if extra else 0.4
     try:
         from google.genai import types  # type: ignore
 
-        prompt = build_suggested_buys_prompt(policy_report, candidates)
+        prompt = build_suggested_buys_prompt(
+            policy_report, candidates, extra_exclude=extra
+        )
         model = gemini_model_name()
         config = types.GenerateContentConfig(
             tools=[types.Tool(google_search=types.GoogleSearch())],
-            temperature=0.4,
+            temperature=temperature,
         )
         resp = gemini.models.generate_content(
             model=model, contents=prompt, config=config
@@ -366,15 +388,19 @@ def generate_suggested_buys(
         parsed = parse_suggested_buys_json(resp.text or "")
         if allowed:
             parsed = [s for s in parsed if s.get("symbol") in allowed]
+        parsed = [s for s in parsed if s.get("symbol") not in extra]
         return enrich_suggested_buys(parsed, held=held), ""
     except Exception as e:
         try:
-            prompt = build_suggested_buys_prompt(policy_report, candidates)
+            prompt = build_suggested_buys_prompt(
+                policy_report, candidates, extra_exclude=extra
+            )
             model = gemini_model_name()
             resp = gemini.models.generate_content(model=model, contents=prompt)
             parsed = parse_suggested_buys_json(resp.text or "")
             if allowed:
                 parsed = [s for s in parsed if s.get("symbol") in allowed]
+            parsed = [s for s in parsed if s.get("symbol") not in extra]
             return enrich_suggested_buys(parsed, held=held), f"grounding_fallback: {e}"
         except Exception as e2:
             return [], str(e2)

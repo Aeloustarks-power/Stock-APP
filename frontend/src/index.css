@@ -439,6 +439,14 @@ button {
   gap: 8px;
 }
 
+.ideas-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
 .action-item,
 .idea-card {
   border: 1px solid var(--border);

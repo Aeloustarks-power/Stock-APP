@@ -1,10 +1,31 @@
 import React from 'react';
 
-export default function IdeasTab({ loading, suggestedBuys }) {
+export default function IdeasTab({
+  loading,
+  suggestedBuys,
+  onMoreIdeas,
+  moreLoading,
+}) {
   return (
     <>
-      {!loading && suggestedBuys.length === 0 && (
-        <p className="empty">Run Analyze for portfolio-aware suggested buys (screen → AI rank).</p>
+      <div className="ideas-toolbar">
+        <button
+          type="button"
+          className="btn btn-primary"
+          onClick={onMoreIdeas}
+          disabled={loading || moreLoading}
+        >
+          {moreLoading ? 'Finding ideas…' : 'More ideas'}
+        </button>
+        <span className="meta">
+          Skips holdings and names already shown this visit. Catalyst + risk from Gemini.
+        </span>
+      </div>
+      {!loading && !moreLoading && suggestedBuys.length === 0 && (
+        <p className="empty">Tap More ideas (or Analyze) for portfolio-aware suggested buys.</p>
+      )}
+      {(loading || moreLoading) && suggestedBuys.length === 0 && (
+        <p className="empty">Screening Nasdaq-100 then ranking with Gemini. Can take up to a minute.</p>
       )}
       <div className="idea-list">
         {suggestedBuys.slice(0, 3).map((s) => (

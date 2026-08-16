@@ -36,6 +36,8 @@ export default function AnalysisPane({
   onBulkTextChange,
   onApplyBulkPaste,
   editing,
+  onMoreIdeas,
+  moreLoading,
 }) {
   return (
     <section className="pane" aria-label="Analysis">
@@ -69,7 +71,12 @@ export default function AnalysisPane({
           <ActionsTab loading={loading} ruleActions={ruleActions} />
         )}
         {activeTab === 'ideas' && (
-          <IdeasTab loading={loading} suggestedBuys={suggestedBuys} />
+          <IdeasTab
+            loading={loading}
+            suggestedBuys={suggestedBuys}
+            onMoreIdeas={onMoreIdeas}
+            moreLoading={moreLoading}
+          />
         )}
         {activeTab === 'ai' && <AiTab loading={loading} analysis={aiAnalysis} />}
         {activeTab === 'tools' && (

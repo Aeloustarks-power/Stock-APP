@@ -80,6 +80,8 @@ function App() {
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState(null);
   const [refreshingSnapshots, setRefreshingSnapshots] = useState(false);
+  const [ideasLoading, setIdeasLoading] = useState(false);
+  const [seenIdeaSymbols, setSeenIdeaSymbols] = useState([]);
 
   const fetchPortfolio = useCallback(async () => {
     setPortfolioLoading(true);
@@ -335,6 +337,13 @@ function App() {
             : []
       );
       setSuggestedBuys(Array.isArray(data?.suggested_buys) ? data.suggested_buys : []);
+      setSeenIdeaSymbols((prev) => {
+        const next = new Set(prev);
+        for (const s of data?.suggested_buys || []) {
+          if (s?.symbol) next.add(String(s.symbol).toUpperCase());
+        }
+        return Array.from(next);
+      });
       setSectorBreakdown(
         Array.isArray(data?.sector_breakdown)
           ? data.sector_breakdown
@@ -348,6 +357,48 @@ function App() {
       setAiError(friendlyNetworkError(err));
     } finally {
       setAiLoading(false);
+    }
+  };
+
+  const handleMoreIdeas = async () => {
+    setIdeasLoading(true);
+    setAiError(null);
+    setActiveTab('ideas');
+    try {
+      const exclude = seenIdeaSymbols
+        .concat((suggestedBuys || []).map((s) => s.symbol))
+        .filter(Boolean)
+        .join(',');
+      const qs = new URLSearchParams({
+        portfolio_id: selectedPortfolio,
+      });
+      if (exclude) qs.set('exclude', exclude);
+      const response = await apiFetch(`/api/ideas?${qs.toString()}`, { method: 'POST' });
+      if (!response.ok) {
+        const errPayload = await response.json().catch(() => ({}));
+        throw new Error(formatApiErrorDetail(errPayload?.detail) || 'Failed to fetch ideas');
+      }
+      const data = await response.json();
+      const next = Array.isArray(data?.suggested_buys) ? data.suggested_buys : [];
+      if (!next.length) {
+        throw new Error(
+          data?.suggest_error ||
+            'No new names in the screen. Try again later or run Analyze first.'
+        );
+      }
+      setSuggestedBuys(next);
+      setSeenIdeaSymbols((prev) => {
+        const merged = new Set(prev);
+        for (const s of next) {
+          if (s?.symbol) merged.add(String(s.symbol).toUpperCase());
+        }
+        return Array.from(merged);
+      });
+      if (data?.suggest_error) setAiError(data.suggest_error);
+    } catch (err) {
+      setAiError(friendlyNetworkError(err));
+    } finally {
+      setIdeasLoading(false);
     }
   };
 
@@ -503,6 +554,8 @@ function App() {
           onBulkTextChange={setBulkText}
           onApplyBulkPaste={applyBulkPaste}
           editing={editingHoldings}
+          onMoreIdeas={handleMoreIdeas}
+          moreLoading={ideasLoading}
         />
       </div>
     </div>
