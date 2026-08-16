@@ -1,18 +1,9 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { BarChart3, ShieldAlert, Plus, Trash2, RefreshCw, Lock } from 'lucide-react';
-import ReactMarkdown from 'react-markdown';
-import {
-  PieChart,
-  Pie,
-  Cell,
-  ResponsiveContainer,
-  Tooltip,
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-} from 'recharts';
+import React, { useCallback, useEffect, useState } from 'react';
+import { ShieldAlert } from 'lucide-react';
+import LockScreen from './components/LockScreen.jsx';
+import HoldingsTable from './components/HoldingsTable.jsx';
+import AnalysisPane from './components/AnalysisPane.jsx';
+import TopBar from './components/TopBar.jsx';
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? 'http://localhost:8000';
 const TOKEN_KEY = 'us-stock-site-token';
@@ -49,16 +40,6 @@ const PROFILES = [
   { id: 'Eric', label: 'Eric' },
   { id: 'Vivien', label: 'Vivien' },
 ];
-
-const TABS = [
-  { id: 'overview', label: 'Overview' },
-  { id: 'actions', label: 'Actions' },
-  { id: 'ideas', label: 'Ideas' },
-  { id: 'ai', label: 'AI' },
-  { id: 'tools', label: 'Tools' },
-];
-
-const CHART_COLORS = ['#5D4037', '#8D6E63', '#A1887F', '#BCAAA4', '#6D4C41', '#3E2723', '#E8C547', '#827717'];
 
 function formatApiErrorDetail(detail) {
   if (detail == null) return '';
@@ -116,10 +97,6 @@ function parseBulkPaste(text) {
     });
   }
   return rows;
-}
-
-function money(n) {
-  return `$${Number(n ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
 function App() {
@@ -428,51 +405,6 @@ function App() {
     }
   };
 
-  const sectorChartData = useMemo(
-    () =>
-      (sectorBreakdown || []).map((s) => ({
-        name: s.sector || 'Unknown',
-        value: Number(s.weight_pct || 0),
-      })),
-    [sectorBreakdown]
-  );
-
-  const actionChartData = useMemo(
-    () =>
-      (ruleActions || []).map((a) => ({
-        name: `${a.symbol}`,
-        type: a.type,
-        usd: Number(a.trade_usd || 0),
-      })),
-    [ruleActions]
-  );
-
-  const displaySymbol = stockData?.shortName ?? stockData?.symbol ?? '';
-  const displayPrice = stockData?.price ?? stockData?.regularMarketPrice;
-  const inferredAdvice =
-    stockData?.advice ??
-    (() => {
-      const pct = stockData?.regularMarketChangePercent;
-      if (typeof pct !== 'number') return 'N/A';
-      const pctStr = `${pct.toFixed(2)}%`;
-      return pct >= 0 ? `GAIN (${pctStr})` : `LOSS (${pctStr})`;
-    })();
-  const adviceOk =
-    typeof stockData?.advice === 'string'
-      ? stockData.advice.includes('BUY')
-      : typeof stockData?.regularMarketChangePercent === 'number' &&
-        stockData.regularMarketChangePercent >= 0;
-
-  const markdownComponents = {
-    h1: ({ children }) => <h2>{children}</h2>,
-    h2: ({ children }) => <h3>{children}</h3>,
-    h3: ({ children }) => <h4>{children}</h4>,
-    p: ({ children }) => <p>{children}</p>,
-    li: ({ children }) => <li>{children}</li>,
-    ul: ({ children }) => <ul>{children}</ul>,
-    ol: ({ children }) => <ol>{children}</ol>,
-  };
-
   const handleUnlock = async (event) => {
     event.preventDefault();
     setAuthBusy(true);
@@ -518,136 +450,36 @@ function App() {
 
   if (authChecking || !unlocked) {
     return (
-      <div className="lock-screen">
-        <form className="lock-card" onSubmit={handleUnlock}>
-          <div className="lock-brand">
-            <BarChart3 size={26} color="#1c1917" />
-            <h1>US Stock Sentinel</h1>
-          </div>
-          {authChecking ? (
-            <p className="empty">Checking access…</p>
-          ) : (
-            <>
-              <p className="lock-copy">Enter the site password to view and edit portfolios.</p>
-              <label htmlFor="site-password">Password</label>
-              <input
-                id="site-password"
-                className="lock-input"
-                type="password"
-                autoComplete="current-password"
-                value={passwordInput}
-                onChange={(e) => setPasswordInput(e.target.value)}
-                autoFocus
-              />
-              {authError && (
-                <div className="banner" role="alert">
-                  <ShieldAlert size={16} />
-                  <span>{authError}</span>
-                </div>
-              )}
-              <button type="submit" className="btn btn-primary" disabled={authBusy || !passwordInput}>
-                <Lock size={14} />
-                {authBusy ? 'Checking…' : 'Unlock'}
-              </button>
-            </>
-          )}
-        </form>
-      </div>
+      <LockScreen
+        checking={authChecking}
+        password={passwordInput}
+        error={authError}
+        busy={authBusy}
+        onPasswordChange={setPasswordInput}
+        onSubmit={handleUnlock}
+      />
     );
   }
 
   return (
     <div className="app-shell">
-      <header className="topbar">
-        <div className="brand">
-          <BarChart3 size={26} color="#1c1917" />
-          <h1>US Stock Sentinel</h1>
-        </div>
-
-        <div className="topbar-controls">
-          <div className="field">
-            <label htmlFor="portfolio">Portfolio</label>
-            <select
-              id="portfolio"
-              value={selectedPortfolio}
-              onChange={(e) => setSelectedPortfolio(e.target.value)}
-            >
-              {PROFILES.map((profile) => (
-                <option key={profile.id} value={profile.id}>
-                  {profile.label}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div className="field">
-            <label htmlFor="cash">Cash</label>
-            <input
-              id="cash"
-              className="mono"
-              type="number"
-              min="0"
-              step="any"
-              value={cashUsd}
-              onChange={(e) => setCashUsd(e.target.value)}
-              style={{ width: 110 }}
-            />
-          </div>
-
-          {snapshotMeta?.updated_at && (
-            <span className="meta" title="Market snapshot time">
-              {snapshotMeta.updated_at}
-              {snapshotMeta.symbol_count != null ? ` · ${snapshotMeta.symbol_count}` : ''}
-            </span>
-          )}
-
-          <button
-            type="button"
-            className="btn btn-ghost"
-            onClick={handleRefreshSnapshots}
-            disabled={refreshingSnapshots}
-          >
-            <RefreshCw size={14} />
-            {refreshingSnapshots ? '…' : 'Refresh'}
-          </button>
-
-          <button
-            type="button"
-            className="btn"
-            onClick={addRow}
-          >
-            <Plus size={14} /> Row
-          </button>
-
-          <button
-            type="button"
-            className="btn btn-primary"
-            onClick={handleSaveAll}
-            disabled={portfolioSaving || portfolioLoading}
-          >
-            {portfolioSaving ? 'Saving…' : 'Save all'}
-          </button>
-
-          <button
-            type="button"
-            className="btn btn-primary"
-            onClick={handleAnalyzePortfolio}
-            disabled={aiLoading || portfolioLoading}
-          >
-            {aiLoading ? 'Analyzing…' : 'Analyze'}
-          </button>
-
-          <button
-            type="button"
-            className="btn btn-ghost"
-            onClick={handleLock}
-            title="Lock site"
-          >
-            <Lock size={14} />
-            Lock
-          </button>
-        </div>
-      </header>
+      <TopBar
+        profiles={PROFILES}
+        selectedPortfolio={selectedPortfolio}
+        onPortfolioChange={setSelectedPortfolio}
+        cashUsd={cashUsd}
+        onCashChange={setCashUsd}
+        snapshotMeta={snapshotMeta}
+        onRefresh={handleRefreshSnapshots}
+        refreshing={refreshingSnapshots}
+        onAddRow={addRow}
+        onSaveAll={handleSaveAll}
+        saving={portfolioSaving}
+        loading={portfolioLoading}
+        onAnalyze={handleAnalyzePortfolio}
+        analyzing={aiLoading}
+        onLock={handleLock}
+      />
 
       {banner && (
         <div className="banner" role="alert">
@@ -657,295 +489,32 @@ function App() {
       )}
 
       <div className="workspace">
-        <section className="pane" aria-label="Holdings">
-          <div className="pane-header">
-            <h2>Holdings</h2>
-            <span className="meta">{portfolioLoading ? 'Loading…' : `${rows.filter((r) => r.symbol.trim()).length} names`}</span>
-          </div>
-          <div className="table-wrap">
-            {portfolioLoading ? (
-              <p className="empty" style={{ padding: 12 }}>Loading…</p>
-            ) : (
-              <table className="holdings-table">
-                <thead>
-                  <tr>
-                    <th className="col-symbol">Symbol</th>
-                    <th className="col-shares">Shares</th>
-                    <th className="col-cost">Cost / share</th>
-                    <th className="col-actions" />
-                  </tr>
-                </thead>
-                <tbody>
-                  {rows.map((row) => (
-                    <tr key={row.id}>
-                      <td className="col-symbol">
-                        <input
-                          className="mono"
-                          value={row.symbol}
-                          onChange={(e) => updateRow(row.id, 'symbol', e.target.value)}
-                          placeholder="AAPL"
-                        />
-                      </td>
-                      <td className="col-shares">
-                        <input
-                          className="mono"
-                          type="number"
-                          min="0"
-                          step="any"
-                          value={row.shares}
-                          onChange={(e) => updateRow(row.id, 'shares', e.target.value)}
-                        />
-                      </td>
-                      <td className="col-cost">
-                        <input
-                          className="mono"
-                          type="number"
-                          min="0"
-                          step="any"
-                          value={row.cost_basis}
-                          onChange={(e) => updateRow(row.id, 'cost_basis', e.target.value)}
-                        />
-                      </td>
-                      <td className="col-actions">
-                        <button
-                          type="button"
-                          className="btn btn-danger"
-                          onClick={() => removeRow(row.id)}
-                          aria-label="Remove row"
-                        >
-                          <Trash2 size={14} />
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </div>
-        </section>
+        <HoldingsTable
+          rows={rows}
+          loading={portfolioLoading}
+          onUpdateRow={updateRow}
+          onRemoveRow={removeRow}
+        />
 
-        <section className="pane" aria-label="Analysis">
-          <div className="pane-header">
-            <div className="tabs" role="tablist">
-              {TABS.map((tab) => (
-                <button
-                  key={tab.id}
-                  type="button"
-                  role="tab"
-                  aria-selected={activeTab === tab.id}
-                  className={`tab${activeTab === tab.id ? ' active' : ''}`}
-                  onClick={() => setActiveTab(tab.id)}
-                >
-                  {tab.label}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div className="tab-body" role="tabpanel">
-            {activeTab === 'overview' && (
-              <>
-                {!aiTotals && !aiLoading && (
-                  <p className="empty">Run Analyze to see totals and sector mix.</p>
-                )}
-                {aiLoading && <p className="empty">Crunching numbers with Gemini…</p>}
-                {aiTotals && (
-                  <>
-                    <div className="stats">
-                      <div className="stat">
-                        <span className="label">Market value</span>
-                        <span className="value">{money(aiTotals.total_value)}</span>
-                      </div>
-                      <div className="stat">
-                        <span className="label">Invested</span>
-                        <span className="value">{money(aiTotals.total_invested)}</span>
-                      </div>
-                      <div className="stat">
-                        <span className="label">Cash</span>
-                        <span className="value">
-                          {money(aiTotals.cash_usd)} ({Number(aiTotals.cash_pct ?? 0).toFixed(1)}%)
-                        </span>
-                      </div>
-                      <div className="stat">
-                        <span className="label">Unrealized P&amp;L</span>
-                        <span className="value">{money(aiTotals.total_pnl)}</span>
-                      </div>
-                      <div className="stat">
-                        <span className="label">Total cost</span>
-                        <span className="value">{money(aiTotals.total_cost)}</span>
-                      </div>
-                      <div className="stat">
-                        <span className="label">Deploy budget</span>
-                        <span className="value">{money(aiTotals.deploy_budget_usd)}</span>
-                      </div>
-                    </div>
-                    {aiWarnings.length > 0 && (
-                      <ul className="warn-list" style={{ color: 'var(--danger)', marginBottom: 12 }}>
-                        {aiWarnings.map((warning, idx) => (
-                          <li key={`${warning}-${idx}`}>{warning}</li>
-                        ))}
-                      </ul>
-                    )}
-                    {sectorChartData.length > 0 && (
-                      <>
-                        <h3 className="section-title">Sector mix</h3>
-                        <div className="chart-box">
-                          <ResponsiveContainer width="100%" height="100%">
-                            <PieChart>
-                              <Pie data={sectorChartData} dataKey="value" nameKey="name" outerRadius={72} label>
-                                {sectorChartData.map((_, i) => (
-                                  <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />
-                                ))}
-                              </Pie>
-                              <Tooltip formatter={(v) => `${Number(v).toFixed(1)}%`} />
-                            </PieChart>
-                          </ResponsiveContainer>
-                        </div>
-                      </>
-                    )}
-                  </>
-                )}
-              </>
-            )}
-
-            {activeTab === 'actions' && (
-              <>
-                {!aiLoading && ruleActions.length === 0 && (
-                  <p className="empty">No rule actions yet. Run Analyze.</p>
-                )}
-                {ruleActions.length > 0 && (
-                  <>
-                    <ul className="action-list">
-                      {ruleActions.map((a, idx) => (
-                        <li key={`${a.type}-${a.symbol}-${idx}`} className="action-item">
-                          <div className="head">
-                            <span>
-                              {a.symbol} · {a.type}
-                            </span>
-                            <span>
-                              {money(a.trade_usd)}
-                              {a.approx_shares != null ? ` · ~${a.approx_shares} sh` : ''}
-                            </span>
-                          </div>
-                          <div className="reason">{a.reason}</div>
-                        </li>
-                      ))}
-                    </ul>
-                    {actionChartData.length > 0 && (
-                      <div className="chart-box">
-                        <ResponsiveContainer width="100%" height="100%">
-                          <BarChart data={actionChartData}>
-                            <CartesianGrid strokeDasharray="3 3" stroke="#d6cbc0" />
-                            <XAxis dataKey="name" tick={{ fontSize: 11 }} />
-                            <YAxis tick={{ fontSize: 11 }} />
-                            <Tooltip />
-                            <Bar dataKey="usd" fill="#5D4037" />
-                          </BarChart>
-                        </ResponsiveContainer>
-                      </div>
-                    )}
-                  </>
-                )}
-              </>
-            )}
-
-            {activeTab === 'ideas' && (
-              <>
-                {!aiLoading && suggestedBuys.length === 0 && (
-                  <p className="empty">Run Analyze for portfolio-aware suggested buys (screen → AI rank).</p>
-                )}
-                <div className="idea-list">
-                  {suggestedBuys.slice(0, 3).map((s) => (
-                    <article key={s.symbol} className="idea-card">
-                      <div className="head">
-                        <span>{s.symbol}</span>
-                        <span>
-                          {(Number(s.confidence || 0) * 100).toFixed(0)}%
-                          {s.metrics?.price != null ? ` · $${s.metrics.price}` : ''}
-                          {s.metrics?.rsi != null ? ` · RSI ${s.metrics.rsi}` : ''}
-                        </span>
-                      </div>
-                      <p><strong>Thesis:</strong> {s.thesis || '—'}</p>
-                      {s.thesis_zh ? <p className="zh">{s.thesis_zh}</p> : null}
-                      <p><strong>Fit:</strong> {s.fit || '—'}</p>
-                      {s.fit_zh ? <p className="zh">{s.fit_zh}</p> : null}
-                      <p><strong>Catalyst:</strong> {s.catalyst || '—'}</p>
-                      {s.catalyst_zh ? <p className="zh">{s.catalyst_zh}</p> : null}
-                      <p><strong>Risk:</strong> {s.risk || '—'}</p>
-                      {s.risk_zh ? <p className="zh">{s.risk_zh}</p> : null}
-                    </article>
-                  ))}
-                </div>
-              </>
-            )}
-
-            {activeTab === 'ai' && (
-              <>
-                {aiLoading && <p className="empty">Generating summary…</p>}
-                {!aiLoading && !aiAnalysis && (
-                  <p className="empty">AI narrative appears here after Analyze.</p>
-                )}
-                {!aiLoading && aiAnalysis && (
-                  <div className="ai-md">
-                    <ReactMarkdown components={markdownComponents}>{aiAnalysis}</ReactMarkdown>
-                  </div>
-                )}
-              </>
-            )}
-
-            {activeTab === 'tools' && (
-              <div className="tools-stack">
-                <div>
-                  <h3 className="section-title">Quick quote</h3>
-                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                    <input
-                      className="input mono"
-                      value={peekSymbol}
-                      onChange={(e) => setPeekSymbol(e.target.value.toUpperCase())}
-                      placeholder="Ticker"
-                      style={{ width: 140 }}
-                    />
-                    <button type="button" className="btn btn-primary" onClick={() => fetchStockData()}>
-                      {quoteLoading ? '…' : 'Peek'}
-                    </button>
-                  </div>
-                  {stockData && (
-                    <div className="quote-grid">
-                      <div>
-                        <div style={{ fontFamily: 'var(--font-brand)', fontWeight: 700 }}>{displaySymbol}</div>
-                        <div className="quote-price">{displayPrice != null ? `$${displayPrice}` : '—'}</div>
-                        <div className={adviceOk ? 'advice-ok' : 'advice-warn'}>
-                          <strong>ADVICE:</strong> {inferredAdvice}
-                        </div>
-                      </div>
-                      <div className="mono" style={{ fontSize: 13 }}>
-                        <div>MA20: ${stockData.ma20 ?? '—'}</div>
-                        <div>RSI: {stockData.rsi ?? '—'}</div>
-                      </div>
-                    </div>
-                  )}
-                </div>
-
-                <div>
-                  <h3 className="section-title">Bulk paste</h3>
-                  <p className="empty" style={{ marginBottom: 8 }}>
-                    Lines like <span className="mono">AAPL,10,180.5</span>
-                  </p>
-                  <textarea
-                    className="textarea"
-                    value={bulkText}
-                    onChange={(e) => setBulkText(e.target.value)}
-                    placeholder={'AAPL,10,180.5\nMSFT,5,400'}
-                    rows={4}
-                  />
-                  <button type="button" className="btn" style={{ marginTop: 8 }} onClick={applyBulkPaste}>
-                    Apply paste
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
-        </section>
+        <AnalysisPane
+          activeTab={activeTab}
+          onTabChange={setActiveTab}
+          loading={aiLoading}
+          totals={aiTotals}
+          warnings={aiWarnings}
+          sectorBreakdown={sectorBreakdown}
+          ruleActions={ruleActions}
+          suggestedBuys={suggestedBuys}
+          aiAnalysis={aiAnalysis}
+          peekSymbol={peekSymbol}
+          onPeekSymbolChange={setPeekSymbol}
+          onPeek={() => fetchStockData()}
+          quoteLoading={quoteLoading}
+          stockData={stockData}
+          bulkText={bulkText}
+          onBulkTextChange={setBulkText}
+          onApplyBulkPaste={applyBulkPaste}
+        />
       </div>
     </div>
   );
