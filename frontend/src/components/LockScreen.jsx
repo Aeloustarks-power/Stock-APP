@@ -3,7 +3,6 @@ import { BarChart3, ShieldAlert, Lock } from 'lucide-react';
 
 /**
  * Password gate only. App.jsx still owns the password value and unlock logic.
- * This file is just the screen: what it looks like and which events it reports.
  */
 export default function LockScreen({
   checking,
@@ -12,6 +11,7 @@ export default function LockScreen({
   busy,
   onPasswordChange,
   onSubmit,
+  onRetry,
 }) {
   return (
     <div className="lock-screen">
@@ -21,7 +21,9 @@ export default function LockScreen({
           <h1>US Stock Sentinel</h1>
         </div>
         {checking ? (
-          <p className="empty">Checking access…</p>
+          <p className="empty">
+            Checking access… If the API has been idle, Render may take 30–60 seconds to wake.
+          </p>
         ) : (
           <>
             <p className="lock-copy">Enter the site password to view and edit portfolios.</p>
@@ -45,6 +47,11 @@ export default function LockScreen({
               <Lock size={14} />
               {busy ? 'Checking…' : 'Unlock'}
             </button>
+            {onRetry ? (
+              <button type="button" className="btn" onClick={onRetry} disabled={busy}>
+                Retry connection
+              </button>
+            ) : null}
           </>
         )}
       </form>

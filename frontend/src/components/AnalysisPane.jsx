@@ -35,6 +35,7 @@ export default function AnalysisPane({
   bulkText,
   onBulkTextChange,
   onApplyBulkPaste,
+  editing,
 }) {
   return (
     <section className="pane" aria-label="Analysis">
@@ -81,6 +82,7 @@ export default function AnalysisPane({
             bulkText={bulkText}
             onBulkTextChange={onBulkTextChange}
             onApplyBulkPaste={onApplyBulkPaste}
+            editing={editing}
           />
         )}
       </div>

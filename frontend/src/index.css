@@ -218,6 +218,33 @@ button {
   font-size: 13px;
 }
 
+.banner-info {
+  background: #f3eee7;
+  color: var(--ink-muted);
+  border-bottom: 1px solid var(--border);
+}
+
+.holdings-table input:read-only {
+  pointer-events: none;
+  caret-color: transparent;
+}
+
+.holdings-table input:read-only:hover,
+.holdings-table input:read-only:focus {
+  border-color: transparent;
+  background: transparent;
+}
+
+.field input:read-only {
+  background: var(--panel-muted);
+  color: var(--ink);
+}
+
+.pane-editing {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
 .workspace {
   flex: 1 1 auto;
   min-height: 0;
@@ -524,6 +551,17 @@ button {
 
   .brand h1 {
     font-size: 1rem;
+  }
+
+  .btn,
+  .field input,
+  .field select,
+  .holdings-table input:not(:read-only) {
+    min-height: 44px;
+  }
+
+  .btn-danger {
+    min-width: 44px;
   }
 }
 

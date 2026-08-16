@@ -1,8 +1,9 @@
 import React from 'react';
-import { BarChart3, Plus, RefreshCw, Lock } from 'lucide-react';
+import { BarChart3, Plus, RefreshCw, Lock, Pencil } from 'lucide-react';
 
 /**
  * Top strip only. App.jsx still owns portfolio, cash, save, analyze, lock.
+ * Cash / add-row / save stay disabled until `editing` is on.
  */
 export default function TopBar({
   profiles,
@@ -13,6 +14,8 @@ export default function TopBar({
   snapshotMeta,
   onRefresh,
   refreshing,
+  editing,
+  onToggleEdit,
   onAddRow,
   onSaveAll,
   saving,
@@ -49,10 +52,12 @@ export default function TopBar({
           <input
             id="cash"
             className="mono"
-            type="number"
+            type={editing ? 'number' : 'text'}
+            inputMode={editing ? 'decimal' : undefined}
             min="0"
             step="any"
             value={cashUsd}
+            readOnly={!editing}
             onChange={(e) => onCashChange(e.target.value)}
             style={{ width: 110 }}
           />
@@ -67,6 +72,15 @@ export default function TopBar({
 
         <button
           type="button"
+          className={`btn${editing ? ' btn-primary' : ' btn-ghost'}`}
+          onClick={onToggleEdit}
+        >
+          <Pencil size={14} />
+          {editing ? 'Done' : 'Edit'}
+        </button>
+
+        <button
+          type="button"
           className="btn btn-ghost"
           onClick={onRefresh}
           disabled={refreshing}
@@ -75,18 +89,22 @@ export default function TopBar({
           {refreshing ? '…' : 'Refresh'}
         </button>
 
-        <button type="button" className="btn" onClick={onAddRow}>
-          <Plus size={14} /> Row
-        </button>
+        {editing ? (
+          <button type="button" className="btn" onClick={onAddRow}>
+            <Plus size={14} /> Row
+          </button>
+        ) : null}
 
-        <button
-          type="button"
-          className="btn btn-primary"
-          onClick={onSaveAll}
-          disabled={saving || loading}
-        >
-          {saving ? 'Saving…' : 'Save all'}
-        </button>
+        {editing ? (
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={onSaveAll}
+            disabled={saving || loading}
+          >
+            {saving ? 'Saving…' : 'Save all'}
+          </button>
+        ) : null}
 
         <button
           type="button"

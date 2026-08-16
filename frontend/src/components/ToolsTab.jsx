@@ -9,6 +9,7 @@ export default function ToolsTab({
   bulkText,
   onBulkTextChange,
   onApplyBulkPaste,
+  editing,
 }) {
   const displaySymbol = stockData?.shortName ?? stockData?.symbol ?? '';
   const displayPrice = stockData?.price ?? stockData?.regularMarketPrice;
@@ -62,7 +63,9 @@ export default function ToolsTab({
       <div>
         <h3 className="section-title">Bulk paste</h3>
         <p className="empty" style={{ marginBottom: 8 }}>
-          Lines like <span className="mono">AAPL,10,180.5</span>
+          {editing
+            ? <>Lines like <span className="mono">AAPL,10,180.5</span></>
+            : 'Tap Edit in the top bar before pasting holdings.'}
         </p>
         <textarea
           className="textarea"
@@ -70,8 +73,15 @@ export default function ToolsTab({
           onChange={(e) => onBulkTextChange(e.target.value)}
           placeholder={'AAPL,10,180.5\nMSFT,5,400'}
           rows={4}
+          readOnly={!editing}
         />
-        <button type="button" className="btn" style={{ marginTop: 8 }} onClick={onApplyBulkPaste}>
+        <button
+          type="button"
+          className="btn"
+          style={{ marginTop: 8 }}
+          onClick={onApplyBulkPaste}
+          disabled={!editing}
+        >
           Apply paste
         </button>
       </div>

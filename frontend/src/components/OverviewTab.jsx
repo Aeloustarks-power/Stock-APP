@@ -18,7 +18,11 @@ export default function OverviewTab({ loading, totals, warnings, sectorBreakdown
     return <p className="empty">Run Analyze to see totals and sector mix.</p>;
   }
   if (loading) {
-    return <p className="empty">Crunching numbers with Gemini…</p>;
+    return (
+      <p className="empty">
+        Analyzing… First run after idle can take 30–60 seconds while Render and Gemini wake up.
+      </p>
+    );
   }
 
   return (

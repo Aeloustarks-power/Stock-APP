@@ -12,7 +12,13 @@ const markdownComponents = {
 };
 
 export default function AiTab({ loading, analysis }) {
-  if (loading) return <p className="empty">Generating summary…</p>;
+  if (loading) {
+    return (
+      <p className="empty">
+        Generating summary… This can take up to a minute if the API was asleep.
+      </p>
+    );
+  }
   if (!analysis) return <p className="empty">AI narrative appears here after Analyze.</p>;
   return (
     <div className="ai-md">

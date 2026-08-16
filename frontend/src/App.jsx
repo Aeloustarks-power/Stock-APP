@@ -4,70 +4,18 @@ import LockScreen from './components/LockScreen.jsx';
 import HoldingsTable from './components/HoldingsTable.jsx';
 import AnalysisPane from './components/AnalysisPane.jsx';
 import TopBar from './components/TopBar.jsx';
+import {
+  apiFetch,
+  formatApiErrorDetail,
+  friendlyNetworkError,
+  getSiteToken,
+  setSiteToken,
+} from './api.js';
 
-const API_BASE = import.meta.env.VITE_API_BASE ?? 'http://localhost:8000';
-const TOKEN_KEY = 'us-stock-site-token';
-
-function getSiteToken() {
-  try {
-    return sessionStorage.getItem(TOKEN_KEY) || '';
-  } catch {
-    return '';
-  }
-}
-
-function setSiteToken(token) {
-  try {
-    if (token) sessionStorage.setItem(TOKEN_KEY, token);
-    else sessionStorage.removeItem(TOKEN_KEY);
-  } catch {
-    // ignore private-mode storage failures
-  }
-}
-
-async function apiFetch(path, options = {}) {
-  const headers = { ...(options.headers || {}) };
-  const token = getSiteToken();
-  if (token) headers.Authorization = `Bearer ${token}`;
-  const response = await fetch(`${API_BASE}${path}`, { ...options, headers });
-  if (response.status === 401) {
-    setSiteToken('');
-    window.dispatchEvent(new Event('site-lock'));
-  }
-  return response;
-}
 const PROFILES = [
   { id: 'Eric', label: 'Eric' },
   { id: 'Vivien', label: 'Vivien' },
 ];
-
-function formatApiErrorDetail(detail) {
-  if (detail == null) return '';
-  if (typeof detail === 'string') return detail;
-  if (Array.isArray(detail)) {
-    return detail
-      .map((item) => {
-        if (item == null) return '';
-        if (typeof item === 'string') return item;
-        if (typeof item === 'object' && 'msg' in item) {
-          const loc = Array.isArray(item.loc) ? item.loc.filter((x) => x !== 'body').join('.') : '';
-          return loc ? `${loc}: ${item.msg}` : String(item.msg);
-        }
-        return JSON.stringify(item);
-      })
-      .filter(Boolean)
-      .join('; ');
-  }
-  if (typeof detail === 'object') {
-    if ('msg' in detail) return String(detail.msg);
-    try {
-      return JSON.stringify(detail);
-    } catch {
-      return String(detail);
-    }
-  }
-  return String(detail);
-}
 
 function emptyRow() {
   return { id: `${Date.now()}-${Math.random().toString(16).slice(2)}`, symbol: '', shares: '', cost_basis: '' };
@@ -105,6 +53,9 @@ function App() {
   const [passwordInput, setPasswordInput] = useState('');
   const [authError, setAuthError] = useState(null);
   const [authBusy, setAuthBusy] = useState(false);
+  const [authNonce, setAuthNonce] = useState(0);
+  const [wakingServer, setWakingServer] = useState(false);
+  const [editingHoldings, setEditingHoldings] = useState(false);
   const [selectedPortfolio, setSelectedPortfolio] = useState(PROFILES[0].id);
   const [activeTab, setActiveTab] = useState('overview');
   const [rows, setRows] = useState([emptyRow()]);
@@ -155,7 +106,7 @@ function App() {
           : [emptyRow()]
       );
     } catch (err) {
-      setPortfolioError(err.message);
+      setPortfolioError(friendlyNetworkError(err));
     } finally {
       setPortfolioLoading(false);
     }
@@ -163,15 +114,25 @@ function App() {
 
   useEffect(() => {
     const lock = () => setUnlocked(false);
+    const slow = () => setWakingServer(true);
+    const slowEnd = () => setWakingServer(false);
     window.addEventListener('site-lock', lock);
-    return () => window.removeEventListener('site-lock', lock);
+    window.addEventListener('api-slow', slow);
+    window.addEventListener('api-slow-end', slowEnd);
+    return () => {
+      window.removeEventListener('site-lock', lock);
+      window.removeEventListener('api-slow', slow);
+      window.removeEventListener('api-slow-end', slowEnd);
+    };
   }, []);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
+      setAuthChecking(true);
+      setAuthError(null);
       try {
-        const statusRes = await fetch(`${API_BASE}/api/auth/status`);
+        const statusRes = await apiFetch('/api/auth/status');
         const statusData = await statusRes.json().catch(() => ({ required: true }));
         if (!statusData.required) {
           if (!cancelled) setUnlocked(true);
@@ -185,8 +146,11 @@ function App() {
         const probe = await apiFetch('/api/snapshots');
         if (!cancelled) setUnlocked(probe.ok);
         if (!probe.ok) setSiteToken('');
-      } catch {
-        if (!cancelled) setUnlocked(false);
+      } catch (err) {
+        if (!cancelled) {
+          setUnlocked(false);
+          setAuthError(friendlyNetworkError(err));
+        }
       } finally {
         if (!cancelled) setAuthChecking(false);
       }
@@ -194,10 +158,11 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [authNonce]);
 
   useEffect(() => {
     if (!unlocked) return;
+    setEditingHoldings(false);
     fetchPortfolio();
   }, [fetchPortfolio, unlocked]);
 
@@ -222,6 +187,10 @@ function App() {
   };
 
   const applyBulkPaste = () => {
+    if (!editingHoldings) {
+      setError('Tap Edit before pasting holdings.');
+      return;
+    }
     const parsed = parseBulkPaste(bulkText);
     if (!parsed.length) {
       setError('Bulk paste needs lines like AAPL,10,180.5');
@@ -295,8 +264,9 @@ function App() {
             }))
           : [emptyRow()]
       );
+      setEditingHoldings(false);
     } catch (err) {
-      setError(err.message);
+      setError(friendlyNetworkError(err));
     } finally {
       setPortfolioSaving(false);
     }
@@ -321,7 +291,7 @@ function App() {
       }
       setStockData(await response.json());
     } catch (err) {
-      setError(err.message);
+      setError(friendlyNetworkError(err));
     } finally {
       setQuoteLoading(false);
     }
@@ -375,7 +345,7 @@ function App() {
       setSnapshotMeta(data?.snapshot_meta ?? report?.snapshot_meta ?? null);
       setAiError(data?.ai_error || data?.suggest_error || null);
     } catch (err) {
-      setAiError(err.message);
+      setAiError(friendlyNetworkError(err));
     } finally {
       setAiLoading(false);
     }
@@ -399,7 +369,7 @@ function App() {
         symbol_count: data.symbol_count,
       });
     } catch (err) {
-      setError(err.message);
+      setError(friendlyNetworkError(err));
     } finally {
       setRefreshingSnapshots(false);
     }
@@ -410,7 +380,7 @@ function App() {
     setAuthBusy(true);
     setAuthError(null);
     try {
-      const response = await fetch(`${API_BASE}/api/auth/login`, {
+      const response = await apiFetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ password: passwordInput }),
@@ -432,7 +402,7 @@ function App() {
       setUnlocked(true);
       setPasswordInput('');
     } catch (err) {
-      setAuthError(err.message || 'Wrong password');
+      setAuthError(friendlyNetworkError(err) || 'Wrong password');
     } finally {
       setAuthBusy(false);
     }
@@ -444,6 +414,7 @@ function App() {
     setPasswordInput('');
     setAuthError(null);
     setAuthChecking(false);
+    setEditingHoldings(false);
   };
 
   const banner = error || portfolioError || aiError;
@@ -457,6 +428,7 @@ function App() {
         busy={authBusy}
         onPasswordChange={setPasswordInput}
         onSubmit={handleUnlock}
+        onRetry={() => setAuthNonce((n) => n + 1)}
       />
     );
   }
@@ -472,6 +444,8 @@ function App() {
         snapshotMeta={snapshotMeta}
         onRefresh={handleRefreshSnapshots}
         refreshing={refreshingSnapshots}
+        editing={editingHoldings}
+        onToggleEdit={() => setEditingHoldings((v) => !v)}
         onAddRow={addRow}
         onSaveAll={handleSaveAll}
         saving={portfolioSaving}
@@ -481,10 +455,21 @@ function App() {
         onLock={handleLock}
       />
 
+      {wakingServer && (
+        <div className="banner banner-info" role="status">
+          Waking the API… Render sleeps when idle. This can take 30–60 seconds.
+        </div>
+      )}
+
       {banner && (
         <div className="banner" role="alert">
           <ShieldAlert size={16} />
           <span>{banner}</span>
+          {portfolioError ? (
+            <button type="button" className="btn" onClick={fetchPortfolio}>
+              Retry
+            </button>
+          ) : null}
         </div>
       )}
 
@@ -492,8 +477,11 @@ function App() {
         <HoldingsTable
           rows={rows}
           loading={portfolioLoading}
+          editing={editingHoldings}
+          loadError={null}
           onUpdateRow={updateRow}
           onRemoveRow={removeRow}
+          onRetry={fetchPortfolio}
         />
 
         <AnalysisPane
@@ -514,6 +502,7 @@ function App() {
           bulkText={bulkText}
           onBulkTextChange={setBulkText}
           onApplyBulkPaste={applyBulkPaste}
+          editing={editingHoldings}
         />
       </div>
     </div>
