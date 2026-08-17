@@ -4,6 +4,7 @@ import ActionsTab from './ActionsTab.jsx';
 import IdeasTab from './IdeasTab.jsx';
 import AiTab from './AiTab.jsx';
 import ToolsTab from './ToolsTab.jsx';
+import { formatSavedAt } from '../lastAnalysis.js';
 
 const TABS = [
   { id: 'overview', label: 'Overview' },
@@ -27,6 +28,11 @@ export default function AnalysisPane({
   ruleActions,
   suggestedBuys,
   aiAnalysis,
+  aiNote,
+  holdingsMix,
+  dip,
+  cashFloorPct,
+  whyNoActions,
   peekSymbol,
   onPeekSymbolChange,
   onPeek,
@@ -38,6 +44,7 @@ export default function AnalysisPane({
   editing,
   onMoreIdeas,
   moreLoading,
+  savedAt,
 }) {
   return (
     <section className="pane" aria-label="Analysis">
@@ -56,6 +63,9 @@ export default function AnalysisPane({
             </button>
           ))}
         </div>
+        {savedAt ? (
+          <span className="meta last-saved">Last saved {formatSavedAt(savedAt)}</span>
+        ) : null}
       </div>
 
       <div className="tab-body" role="tabpanel">
@@ -65,10 +75,17 @@ export default function AnalysisPane({
             totals={totals}
             warnings={warnings}
             sectorBreakdown={sectorBreakdown}
+            holdingsMix={holdingsMix}
+            dip={dip}
+            cashFloorPct={cashFloorPct}
           />
         )}
         {activeTab === 'actions' && (
-          <ActionsTab loading={loading} ruleActions={ruleActions} />
+          <ActionsTab
+            loading={loading}
+            ruleActions={ruleActions}
+            whyNoActions={whyNoActions}
+          />
         )}
         {activeTab === 'ideas' && (
           <IdeasTab
@@ -78,7 +95,9 @@ export default function AnalysisPane({
             moreLoading={moreLoading}
           />
         )}
-        {activeTab === 'ai' && <AiTab loading={loading} analysis={aiAnalysis} />}
+        {activeTab === 'ai' && (
+          <AiTab loading={loading} note={aiNote} analysis={aiAnalysis} />
+        )}
         {activeTab === 'tools' && (
           <ToolsTab
             peekSymbol={peekSymbol}

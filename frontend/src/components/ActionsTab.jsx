@@ -1,31 +1,56 @@
-import React, { useMemo } from 'react';
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import React from 'react';
 import { money } from '../format.js';
 
-export default function ActionsTab({ loading, ruleActions }) {
-  const actionChartData = useMemo(
-    () =>
-      (ruleActions || []).map((a) => ({
-        name: `${a.symbol}`,
-        type: a.type,
-        usd: Number(a.trade_usd || 0),
-      })),
-    [ruleActions]
-  );
+const TYPE_LABEL = {
+  TRIM: 'Trim',
+  RAISE_CASH: 'Raise cash',
+  TAKE_PROFIT_TRIM: 'Take profit',
+  BUY_EXISTING: 'Add to holding',
+  BUY_NEW: 'Buy new',
+};
 
-  if (!loading && ruleActions.length === 0) {
-    return <p className="empty">No rule actions yet. Run Analyze.</p>;
+export default function ActionsTab({ loading, ruleActions, whyNoActions }) {
+  const actions = Array.isArray(ruleActions) ? ruleActions : [];
+  const why = Array.isArray(whyNoActions) ? whyNoActions : [];
+
+  if (actions.length === 0) {
+    if (loading && why.length === 0) {
+      return <p className="empty">Analyzing…</p>;
+    }
+    return (
+      <>
+        {loading ? (
+          <p className="meta" style={{ marginBottom: 10 }}>
+            Updating… last result stays visible until Analyze finishes.
+          </p>
+        ) : null}
+        <p className="empty">No rule trades right now.</p>
+        {why.length > 0 ? (
+          <ul className="why-list">
+            {why.map((line, idx) => (
+              <li key={`${line}-${idx}`}>{line}</li>
+            ))}
+          </ul>
+        ) : !loading ? (
+          <p className="meta">Run Analyze to see whether the policy would trim, raise cash, or buy.</p>
+        ) : null}
+      </>
+    );
   }
-  if (ruleActions.length === 0) return null;
 
   return (
     <>
+      {loading ? (
+        <p className="meta" style={{ marginBottom: 10 }}>
+          Updating… last actions stay visible until Analyze finishes.
+        </p>
+      ) : null}
       <ul className="action-list">
-        {ruleActions.map((a, idx) => (
+        {actions.map((a, idx) => (
           <li key={`${a.type}-${a.symbol}-${idx}`} className="action-item">
             <div className="head">
               <span>
-                {a.symbol} · {a.type}
+                {a.symbol} · {TYPE_LABEL[a.type] || a.type}
               </span>
               <span>
                 {money(a.trade_usd)}
@@ -33,22 +58,10 @@ export default function ActionsTab({ loading, ruleActions }) {
               </span>
             </div>
             <div className="reason">{a.reason}</div>
+            {a.rule_trigger ? <div className="meta">{a.rule_trigger}</div> : null}
           </li>
         ))}
       </ul>
-      {actionChartData.length > 0 && (
-        <div className="chart-box">
-          <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={actionChartData}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#d6cbc0" />
-              <XAxis dataKey="name" tick={{ fontSize: 11 }} />
-              <YAxis tick={{ fontSize: 11 }} />
-              <Tooltip />
-              <Bar dataKey="usd" fill="#5D4037" />
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-      )}
     </>
   );
 }

@@ -11,6 +11,7 @@ import {
   getSiteToken,
   setSiteToken,
 } from './api.js';
+import { loadLastAnalysis, saveLastAnalysis } from './lastAnalysis.js';
 
 const PROFILES = [
   { id: 'Eric', label: 'Eric' },
@@ -45,6 +46,33 @@ function parseBulkPaste(text) {
     });
   }
   return rows;
+}
+
+function holdingsMixFromReport(report, totals) {
+  const positions = Array.isArray(report?.positions) ? report.positions : [];
+  const rows = positions
+    .map((p) => ({
+      symbol: String(p.symbol || '').toUpperCase(),
+      weight_pct: Number(p.weight_pct || 0),
+      pnl: Number(p.pnl || 0),
+      isCash: false,
+    }))
+    .filter((r) => r.symbol);
+  rows.push({
+    symbol: 'CASH',
+    weight_pct: Number(totals?.cash_pct ?? 0),
+    pnl: 0,
+    isCash: true,
+  });
+  return rows;
+}
+
+function dipFromReport(report) {
+  return {
+    combined: Number(report?.combined_dip_level || 0),
+    qqq: report?.qqq || {},
+    spy: report?.spy || {},
+  };
 }
 
 function App() {
@@ -82,6 +110,12 @@ function App() {
   const [refreshingSnapshots, setRefreshingSnapshots] = useState(false);
   const [ideasLoading, setIdeasLoading] = useState(false);
   const [seenIdeaSymbols, setSeenIdeaSymbols] = useState([]);
+  const [analysisSavedAt, setAnalysisSavedAt] = useState(null);
+  const [aiNote, setAiNote] = useState(null);
+  const [holdingsMix, setHoldingsMix] = useState([]);
+  const [dip, setDip] = useState(null);
+  const [cashFloorPct, setCashFloorPct] = useState(0.15);
+  const [whyNoActions, setWhyNoActions] = useState([]);
 
   const fetchPortfolio = useCallback(async () => {
     setPortfolioLoading(true);
@@ -167,6 +201,24 @@ function App() {
     setEditingHoldings(false);
     fetchPortfolio();
   }, [fetchPortfolio, unlocked]);
+
+  useEffect(() => {
+    const saved = loadLastAnalysis(selectedPortfolio);
+    setAiAnalysis(saved?.aiAnalysis ?? null);
+    setAiTotals(saved?.totals ?? null);
+    setAiWarnings(Array.isArray(saved?.warnings) ? saved.warnings : []);
+    setRuleActions(Array.isArray(saved?.ruleActions) ? saved.ruleActions : []);
+    setSuggestedBuys(Array.isArray(saved?.suggestedBuys) ? saved.suggestedBuys : []);
+    setSectorBreakdown(Array.isArray(saved?.sectorBreakdown) ? saved.sectorBreakdown : []);
+    setSnapshotMeta(saved?.snapshotMeta ?? null);
+    setSeenIdeaSymbols(Array.isArray(saved?.seenIdeaSymbols) ? saved.seenIdeaSymbols : []);
+    setAnalysisSavedAt(saved?.savedAt ?? null);
+    setAiNote(saved?.aiNote && typeof saved.aiNote === 'object' ? saved.aiNote : null);
+    setHoldingsMix(Array.isArray(saved?.holdingsMix) ? saved.holdingsMix : []);
+    setDip(saved?.dip && typeof saved.dip === 'object' ? saved.dip : null);
+    setCashFloorPct(Number(saved?.cashFloorPct ?? 0.15) || 0.15);
+    setWhyNoActions(Array.isArray(saved?.whyNoActions) ? saved.whyNoActions : []);
+  }, [selectedPortfolio]);
 
   const updateRow = (id, field, value) => {
     setRows((prev) =>
@@ -302,12 +354,6 @@ function App() {
   const handleAnalyzePortfolio = async () => {
     setAiLoading(true);
     setAiError(null);
-    setAiAnalysis(null);
-    setAiWarnings([]);
-    setAiTotals(null);
-    setRuleActions([]);
-    setSuggestedBuys([]);
-    setSectorBreakdown([]);
     setActiveTab('overview');
     try {
       const response = await apiFetch(
@@ -320,39 +366,68 @@ function App() {
       }
       const data = await response.json();
       const report = data?.policy_report || {};
-      setAiAnalysis(data?.ai_summary ?? 'No response from AI');
-      setAiWarnings(
-        Array.isArray(data?.warnings)
-          ? data.warnings
-          : Array.isArray(report?.warnings)
-            ? report.warnings
-            : []
-      );
-      setAiTotals(data?.totals ?? report?.policy?.totals ?? null);
-      setRuleActions(
-        Array.isArray(data?.rule_actions)
-          ? data.rule_actions
-          : Array.isArray(report?.policy?.recommended_actions)
-            ? report.policy.recommended_actions
-            : []
-      );
-      setSuggestedBuys(Array.isArray(data?.suggested_buys) ? data.suggested_buys : []);
-      setSeenIdeaSymbols((prev) => {
-        const next = new Set(prev);
-        for (const s of data?.suggested_buys || []) {
-          if (s?.symbol) next.add(String(s.symbol).toUpperCase());
-        }
-        return Array.from(next);
-      });
-      setSectorBreakdown(
-        Array.isArray(data?.sector_breakdown)
-          ? data.sector_breakdown
-          : Array.isArray(report?.sector_breakdown)
-            ? report.sector_breakdown
-            : []
-      );
-      setSnapshotMeta(data?.snapshot_meta ?? report?.snapshot_meta ?? null);
+      const nextAnalysis = data?.ai_summary || null;
+      const nextWarnings = Array.isArray(data?.warnings)
+        ? data.warnings
+        : Array.isArray(report?.warnings)
+          ? report.warnings
+          : [];
+      const nextTotals = data?.totals ?? report?.policy?.totals ?? null;
+      const nextActions = Array.isArray(data?.rule_actions)
+        ? data.rule_actions
+        : Array.isArray(report?.policy?.recommended_actions)
+          ? report.policy.recommended_actions
+          : [];
+      const nextBuys = Array.isArray(data?.suggested_buys) ? data.suggested_buys : [];
+      const nextSectors = Array.isArray(data?.sector_breakdown)
+        ? data.sector_breakdown
+        : Array.isArray(report?.sector_breakdown)
+          ? report.sector_breakdown
+          : [];
+      const nextSnap = data?.snapshot_meta ?? report?.snapshot_meta ?? null;
+      const nextSeen = new Set(seenIdeaSymbols);
+      for (const s of nextBuys) {
+        if (s?.symbol) nextSeen.add(String(s.symbol).toUpperCase());
+      }
+      const seenList = Array.from(nextSeen);
+      const nextNote =
+        data?.ai_note && typeof data.ai_note === 'object' && (data.ai_note.crowding || data.ai_note.catalyst || data.ai_note.risk)
+          ? data.ai_note
+          : null;
+      const nextMix = holdingsMixFromReport(report, nextTotals);
+      const nextDip = dipFromReport(report);
+      const nextFloor = Number(report?.policy?.constraints?.cash_floor_pct ?? 0.15) || 0.15;
+      const nextWhy = Array.isArray(report?.why_no_other_actions) ? report.why_no_other_actions : [];
+      setAiAnalysis(nextAnalysis);
+      setAiNote(nextNote);
+      setAiWarnings(nextWarnings);
+      setAiTotals(nextTotals);
+      setRuleActions(nextActions);
+      setSuggestedBuys(nextBuys);
+      setSeenIdeaSymbols(seenList);
+      setSectorBreakdown(nextSectors);
+      setSnapshotMeta(nextSnap);
+      setHoldingsMix(nextMix);
+      setDip(nextDip);
+      setCashFloorPct(nextFloor);
+      setWhyNoActions(nextWhy);
       setAiError(data?.ai_error || data?.suggest_error || null);
+      const stored = saveLastAnalysis(selectedPortfolio, {
+        aiAnalysis: nextAnalysis,
+        aiNote: nextNote,
+        warnings: nextWarnings,
+        totals: nextTotals,
+        ruleActions: nextActions,
+        suggestedBuys: nextBuys,
+        sectorBreakdown: nextSectors,
+        snapshotMeta: nextSnap,
+        seenIdeaSymbols: seenList,
+        holdingsMix: nextMix,
+        dip: nextDip,
+        cashFloorPct: nextFloor,
+        whyNoActions: nextWhy,
+      });
+      setAnalysisSavedAt(stored.savedAt);
     } catch (err) {
       setAiError(friendlyNetworkError(err));
     } finally {
@@ -387,14 +462,20 @@ function App() {
         );
       }
       setSuggestedBuys(next);
-      setSeenIdeaSymbols((prev) => {
-        const merged = new Set(prev);
+      const seenList = (() => {
+        const merged = new Set(seenIdeaSymbols);
         for (const s of next) {
           if (s?.symbol) merged.add(String(s.symbol).toUpperCase());
         }
         return Array.from(merged);
-      });
+      })();
+      setSeenIdeaSymbols(seenList);
       if (data?.suggest_error) setAiError(data.suggest_error);
+      const stored = saveLastAnalysis(selectedPortfolio, {
+        suggestedBuys: next,
+        seenIdeaSymbols: seenList,
+      });
+      setAnalysisSavedAt(stored.savedAt);
     } catch (err) {
       setAiError(friendlyNetworkError(err));
     } finally {
@@ -545,6 +626,11 @@ function App() {
           ruleActions={ruleActions}
           suggestedBuys={suggestedBuys}
           aiAnalysis={aiAnalysis}
+          aiNote={aiNote}
+          holdingsMix={holdingsMix}
+          dip={dip}
+          cashFloorPct={cashFloorPct}
+          whyNoActions={whyNoActions}
           peekSymbol={peekSymbol}
           onPeekSymbolChange={setPeekSymbol}
           onPeek={() => fetchStockData()}
@@ -556,6 +642,7 @@ function App() {
           editing={editingHoldings}
           onMoreIdeas={handleMoreIdeas}
           moreLoading={ideasLoading}
+          savedAt={analysisSavedAt}
         />
       </div>
     </div>

@@ -1157,6 +1157,7 @@ from backend.ai import (
     gemini_model_name as _gemini_model_name,
     build_ai_prompt as _build_ai_prompt,
     build_suggested_buys_prompt as _build_suggested_buys_prompt,
+    format_ai_note as _format_ai_note,
 )
 
 
@@ -1329,7 +1330,8 @@ def run_portfolio_analysis(
         "snapshot_meta": snapshot_store_meta(),
     }
 
-    ai_summary, ai_last_error = _generate_ai_summary(gemini, policy_report)
+    ai_note, ai_last_error = _generate_ai_summary(gemini, policy_report)
+    ai_summary = _format_ai_note(ai_note)
     suggested_buys, suggest_error = _generate_suggested_buys(gemini, policy_report)
     if suggest_error and not ai_last_error:
         # Non-fatal note for UI
@@ -1346,6 +1348,7 @@ def run_portfolio_analysis(
 
     return {
         "ai_summary": ai_summary,
+        "ai_note": ai_note or {},
         "ai_error": ai_last_error,
         "suggest_error": suggest_error,
         "policy_report": policy_report,

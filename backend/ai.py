@@ -57,116 +57,121 @@ def build_ai_prompt(policy_report: Dict[str, Any]) -> str:
     qqq = policy_report.get("qqq", {})
     spy = policy_report.get("spy", {})
     combined = int(policy_report.get("combined_dip_level", 0))
-    why_no_other = policy_report.get("why_no_other_actions", [])
-    uncertainty_notes = policy_report.get("uncertainty_notes", [])
     totals = pol.get("totals", {})
     constraints = pol.get("constraints", {})
     positions = list(policy_report.get("positions") or [])
     sectors = list(policy_report.get("sector_breakdown") or [])
-    notes = list(pol.get("notes") or [])
     warnings = list(policy_report.get("warnings") or [])
-    holdings_count = int(pol.get("holdings_count", len({p.get("symbol") for p in positions}) or 0))
-    max_new_buys = int(pol.get("max_new_buys", 0))
-
-    def fmt_action(a: Dict[str, Any]) -> str:
-        sym = a.get("symbol", "?")
-        typ = a.get("type", "?")
-        usd = a.get("trade_usd", 0)
-        sh = a.get("approx_shares", 0)
-        r = a.get("reason", "")
-        rule = a.get("rule_trigger", "n/a")
-        return f"- {sym}: {typ}, ${usd} (~{sh} sh). {r} (Rule: {rule})"
-
-    lines = [fmt_action(a) for a in actions[:10]]
 
     pos_sorted = sorted(positions, key=lambda p: -_safe_float(p.get("weight_pct"), 0.0))[:8]
     pos_lines: List[str] = []
+    held: List[str] = []
     for p in pos_sorted:
-        sym = p.get("symbol", "?")
+        sym = str(p.get("symbol", "?") or "?")
+        held.append(sym)
         w = _safe_float(p.get("weight_pct"), 0.0)
         val = _safe_float(p.get("position_value"), 0.0)
         pnl = _safe_float(p.get("pnl"), 0.0)
         rsi = _safe_float(p.get("rsi"), 0.0)
-        px = _safe_float(p.get("current_price"), 0.0)
-        ma = _safe_float(p.get("ma20"), 0.0)
-        vs = "above MA20" if px >= ma else "below MA20"
         pos_lines.append(
-            f"- {sym}: weight {w:.2f}%, value ${val:,.0f}, P/L ${pnl:+,.0f}, RSI {rsi:.0f}, {vs}"
+            f"- {sym}: {w:.1f}%  ${val:,.0f}  P/L ${pnl:+,.0f}  RSI {rsi:.0f}  "
+            f"sector {p.get('sector') or 'Unknown'}"
         )
 
     sec_lines = [
-        f"- {s.get('sector', '?')}: {s.get('weight_pct', 0):.1f}% (${s.get('value', 0):,.0f})"
+        f"- {s.get('sector', '?')}: {s.get('weight_pct', 0):.1f}%"
         for s in sectors[:6]
     ]
+    action_lines = [
+        f"- {a.get('symbol')}: {a.get('type')} ${a.get('trade_usd', 0):,.0f} — {a.get('reason', '')}"
+        for a in (actions or [])[:5]
+    ]
 
-    q_close = qqq.get("close")
-    s_close = spy.get("close")
-    bench = ""
-    if q_close is not None and s_close is not None:
-        bench = f"- QQQ last ${q_close}, SPY last ${s_close}"
+    return f"""You are a US equities portfolio research assistant for THIS book only.
+Job: a short decision note. Do NOT recap totals, cash %, or rule actions — the dashboard already shows those.
+Do NOT suggest new tickers or a watchlist (another tab does that).
+Use Google Search for a real, recent catalyst that affects names already held (earnings, product, regulation, sector news). Do NOT invent prices or metrics.
+Every narrative field is bilingual: English AND Simplified Chinese (separate keys).
 
-    return f"""You are a portfolio assistant. Use the numbers and tickers below for portfolio-specific commentary; do NOT fabricate metrics.
-Write EVERY commentary line in bilingual form: English first, then Simplified Chinese on the same numbered item.
-Format each line like: `1) Status: OK / Attention / Action — 状态：正常 / 关注 / 行动`
-Keep ticker symbols (AAPL, QQQ, etc.) in English. Do NOT invent prices or metrics.
-Only in the final watchlist line may you mention 1–2 additional well-known U.S. tickers (not already listed) if you justify them with a brief macro catalyst.
+Held names (only these tickers may appear): {', '.join(held) or '(none)'}
 
-Policy:
-- Cash floor: {constraints.get('cash_floor_pct', 0.15)*100:.0f}% (do not recommend buys that drop below it)
-- Max holdings: {constraints.get('max_holdings', 18)}
-- Min trade: ${constraints.get('min_trade_usd', 200):.0f}
-
-Today:
-- Portfolio value: ${totals.get('total_value', 0):.2f} (invested ${totals.get('total_invested', 0):.2f})
-- Cash: ${totals.get('cash_usd', 0):.2f} ({totals.get('cash_pct', 0):.2f}%)
-- Cash needed to reach floor: ${totals.get('cash_needed_usd', 0):.2f}
-- Excess cash above floor: ${totals.get('excess_cash_usd', 0):.2f}
-- Deploy budget (rules): ${totals.get('deploy_budget_usd', 0):.2f}
-- Holdings: {holdings_count} / max {constraints.get('max_holdings', 18)}, new-buy slots: {max_new_buys}
-- Dip level (dual benchmark): L{combined} (max of QQQ/SPY)
-- QQQ: L{qqq.get('dip_level', 0)} (6M {qqq.get('drawdown_6m_pct', 0):.2f}%, 12M {qqq.get('drawdown_12m_pct', 0):.2f}%)
-- SPY: L{spy.get('dip_level', 0)} (6M {spy.get('drawdown_6m_pct', 0):.2f}%, 12M {spy.get('drawdown_12m_pct', 0):.2f}%)
-{bench}
-
-Recommended actions (already computed; you prioritize and explain):
-{chr(10).join(lines) if lines else "- (none)"}
-
-Top holdings (reference for narrative):
-{chr(10).join(pos_lines) if pos_lines else "- (none)"}
-
-Sector mix:
-{chr(10).join(sec_lines) if sec_lines else "- Unknown / not grouped"}
-
-Policy engine notes:
-{chr(10).join(f"- {n}" for n in notes) if notes else "- (none)"}
-
-Why no other actions:
-{chr(10).join(f"- {x}" for x in why_no_other) if why_no_other else "- (n/a)"}
-
-Uncertainty / confidence:
-{chr(10).join(f"- {x}" for x in uncertainty_notes) if uncertainty_notes else "- Data looks complete; monitoring only."}
-
+Book snapshot (context, do not repeat as a numbered list):
+- Value ${totals.get('total_value', 0):,.0f}, cash ${totals.get('cash_usd', 0):,.0f} ({totals.get('cash_pct', 0):.1f}%), floor {constraints.get('cash_floor_pct', 0.15)*100:.0f}%
+- Dip L{combined} (QQQ L{qqq.get('dip_level', 0)}, SPY L{spy.get('dip_level', 0)})
+Holdings:
+{chr(10).join(pos_lines) if pos_lines else '- (none)'}
+Sectors:
+{chr(10).join(sec_lines) if sec_lines else '- Unknown'}
+Rule actions already computed (mention only if they change crowding/risk; do not list them as the answer):
+{chr(10).join(action_lines) if action_lines else '- (none)'}
 Data warnings:
-{chr(10).join(f"- {w}" for w in warnings) if warnings else "- (none)"}
+{chr(10).join(f'- {w}' for w in warnings) if warnings else '- (none)'}
 
-Output format (numbered lines, no markdown tables; each item MUST include English then 中文):
-1) Status: ...
-2) Market: ...
-3) Cash: ...
-4) Actions: line 1 — "SYMBOL — ACTION — $ — ~shares — (Rule: ...)" or (none)
-5) Actions: line 2 — same format or (none)
-6) Actions: line 3 — same format or (none)
-7) Why: ...
-8) Uncertainty: ...
-9) Disclaimer: Not financial advice; rules are heuristic. — 非投资建议；规则仅为启发式。
-10) Portfolio: ...
-11) Holdings: 2–4 short lines on top names by weight (symbols from "Top holdings" only)
-12) Sectors: 1–2 lines on mix (or note if sector data is mostly Unknown)
-13) Risks / data: ...
-14) Optional: one line on RSI/MA20 for a top holding if notable (numbers from the list only)
-15) Watchlist: "Ticker — theme" for 1–2 potential buys outside the current portfolio (bilingual justification, no fabricated prices)
-Keep total under ~30 short lines; stay factual.
+Return ONLY valid JSON (no markdown fences):
+{{
+  "crowding": "English: which 1–2 holdings dominate, and why that matters now (weights from the list)",
+  "crowding_zh": "中文：集中度",
+  "catalyst": "English: one near-term searchable catalyst for a held name or the book’s main sector",
+  "catalyst_zh": "中文：催化剂",
+  "risk": "English: what would prove this book’s stance wrong in the next weeks (falsifier)",
+  "risk_zh": "中文：证伪/风险"
+}}
+2–4 sentences per English field. No tickers outside the held list. Not financial advice.
 """
+
+
+def parse_ai_note_json(text: str) -> Dict[str, str]:
+    raw = (text or "").strip()
+    if not raw:
+        return {}
+    fence = re.search(r"```(?:json)?\s*([\s\S]*?)```", raw, re.I)
+    if fence:
+        raw = fence.group(1).strip()
+    data: Any = None
+    try:
+        data = json.loads(raw)
+    except Exception:
+        start = raw.find("{")
+        end = raw.rfind("}")
+        if start < 0 or end <= start:
+            return {}
+        try:
+            data = json.loads(raw[start : end + 1])
+        except Exception:
+            return {}
+    if not isinstance(data, dict):
+        return {}
+    note = {
+        "crowding": str(data.get("crowding") or "").strip(),
+        "crowding_zh": str(data.get("crowding_zh") or "").strip(),
+        "catalyst": str(data.get("catalyst") or "").strip(),
+        "catalyst_zh": str(data.get("catalyst_zh") or "").strip(),
+        "risk": str(data.get("risk") or "").strip(),
+        "risk_zh": str(data.get("risk_zh") or "").strip(),
+    }
+    if not (note["crowding"] or note["catalyst"] or note["risk"]):
+        return {}
+    return note
+
+
+def format_ai_note(note: Dict[str, Any]) -> str:
+    """Plain markdown fallback for older UI / last-saved text."""
+    if not note:
+        return ""
+    blocks = []
+    if note.get("crowding"):
+        blocks.append(f"**Crowding:** {note['crowding']}")
+        if note.get("crowding_zh"):
+            blocks.append(str(note["crowding_zh"]))
+    if note.get("catalyst"):
+        blocks.append(f"**Catalyst:** {note['catalyst']}")
+        if note.get("catalyst_zh"):
+            blocks.append(str(note["catalyst_zh"]))
+    if note.get("risk"):
+        blocks.append(f"**Risk:** {note['risk']}")
+        if note.get("risk_zh"):
+            blocks.append(str(note["risk_zh"]))
+    return "\n\n".join(blocks)
 
 
 def screen_buy_candidates(
@@ -340,16 +345,44 @@ def enrich_suggested_buys(
     return enriched
 
 
-def generate_ai_summary(gemini: Any, policy_report: Dict[str, Any]) -> Tuple[str, str]:
+def generate_ai_summary(gemini: Any, policy_report: Dict[str, Any]) -> Tuple[Dict[str, str], str]:
+    """Return (note dict with crowding/catalyst/risk, error string)."""
     if not gemini or genai is None:
-        return "", "Gemini is not configured (set GEMINI_API_KEY)."
+        return {}, "Gemini is not configured (set GEMINI_API_KEY)."
+    prompt = build_ai_prompt(policy_report)
+    model = gemini_model_name()
+
+    def _parse(resp_text: str) -> Dict[str, str]:
+        return parse_ai_note_json(resp_text or "")
+
     try:
-        prompt = build_ai_prompt(policy_report)
-        model = gemini_model_name()
-        resp = gemini.models.generate_content(model=model, contents=prompt)
-        return (resp.text or "").strip(), ""
+        from google.genai import types  # type: ignore
+
+        config = types.GenerateContentConfig(
+            tools=[types.Tool(google_search=types.GoogleSearch())],
+            temperature=0.4,
+        )
+        resp = gemini.models.generate_content(model=model, contents=prompt, config=config)
+        note = _parse(resp.text or "")
+        if note:
+            return note, ""
     except Exception as e:
-        return "", str(e)
+        try:
+            resp = gemini.models.generate_content(model=model, contents=prompt)
+            note = _parse(resp.text or "")
+            if note:
+                return note, f"grounding_fallback: {e}"
+            return {}, str(e)
+        except Exception as e2:
+            return {}, str(e2)
+    try:
+        resp = gemini.models.generate_content(model=model, contents=prompt)
+        note = _parse(resp.text or "")
+        if note:
+            return note, ""
+        return {}, "AI note was empty or unreadable."
+    except Exception as e:
+        return {}, str(e)
 
 
 def generate_suggested_buys(
@@ -420,6 +453,8 @@ __all__ = [
     "ai_output_lang",
     "build_ai_prompt",
     "build_suggested_buys_prompt",
+    "parse_ai_note_json",
+    "format_ai_note",
     "generate_ai_summary",
     "generate_suggested_buys",
     "_build_ai_prompt",
