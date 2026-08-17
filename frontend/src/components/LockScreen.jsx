@@ -1,8 +1,9 @@
-import React from 'react';
-import { BarChart3, ShieldAlert, Lock } from 'lucide-react';
+import React, { useState } from 'react';
+import { BarChart3, ShieldAlert, Lock, Eye, EyeOff } from 'lucide-react';
 
 /**
  * Password gate only. App.jsx still owns the password value and unlock logic.
+ * Show/hide is local UI state — default stays masked.
  */
 export default function LockScreen({
   checking,
@@ -13,6 +14,8 @@ export default function LockScreen({
   onSubmit,
   onRetry,
 }) {
+  const [showPassword, setShowPassword] = useState(false);
+
   return (
     <div className="lock-screen">
       <form className="lock-card" onSubmit={onSubmit}>
@@ -28,15 +31,27 @@ export default function LockScreen({
           <>
             <p className="lock-copy">Enter the site password to view and edit portfolios.</p>
             <label htmlFor="site-password">Password</label>
-            <input
-              id="site-password"
-              className="lock-input"
-              type="password"
-              autoComplete="current-password"
-              value={password}
-              onChange={(e) => onPasswordChange(e.target.value)}
-              autoFocus
-            />
+            <div className="lock-input-wrap">
+              <input
+                id="site-password"
+                className="lock-input"
+                type={showPassword ? 'text' : 'password'}
+                autoComplete="current-password"
+                value={password}
+                onChange={(e) => onPasswordChange(e.target.value)}
+                autoFocus
+              />
+              <button
+                type="button"
+                className="lock-toggle"
+                onClick={() => setShowPassword((open) => !open)}
+                aria-pressed={showPassword}
+                aria-label={showPassword ? 'Hide password' : 'Show password'}
+                title={showPassword ? 'Hide password' : 'Show password'}
+              >
+                {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+              </button>
+            </div>
             {error && (
               <div className="banner" role="alert">
                 <ShieldAlert size={16} />

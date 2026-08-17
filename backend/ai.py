@@ -316,7 +316,7 @@ def parse_suggested_buys_json(text: str) -> List[Dict[str, Any]]:
 def enrich_suggested_buys(
     suggestions: List[Dict[str, Any]], *, held: set
 ) -> List[Dict[str, Any]]:
-    from backend.service import _calc_position_metrics_cached
+    from backend.market import _calc_position_metrics_cached
 
     enriched: List[Dict[str, Any]] = []
     for s in suggestions:

@@ -564,8 +564,14 @@ button {
   .btn,
   .field input,
   .field select,
-  .holdings-table input:not(:read-only) {
+  .holdings-table input:not(:read-only),
+  .lock-input {
     min-height: 44px;
+  }
+
+  .lock-toggle {
+    width: 44px;
+    height: 44px;
   }
 
   .btn-danger {
@@ -627,15 +633,41 @@ button {
   color: var(--ink-muted);
 }
 
+.lock-input-wrap {
+  position: relative;
+}
+
 .lock-input {
   width: 100%;
   border: 1px solid var(--border);
   border-radius: 8px;
-  padding: 9px 10px;
+  padding: 9px 40px 9px 10px;
   background: #fff;
 }
 
 .lock-input:focus {
   outline: 2px solid rgba(201, 162, 39, 0.45);
   border-color: var(--accent-deep);
+}
+
+.lock-toggle {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink-muted);
+  cursor: pointer;
+}
+
+.lock-toggle:hover {
+  color: var(--ink);
+  background: #f3eee7;
 }
