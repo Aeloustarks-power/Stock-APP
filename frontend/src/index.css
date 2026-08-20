@@ -401,17 +401,30 @@ button {
   padding: 8px 10px;
   display: flex;
   justify-content: space-between;
-  align-items: baseline;
+  align-items: flex-start;
   gap: 8px;
 }
 
 .stat .label {
-  display: block;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
   font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
   color: var(--ink-muted);
   margin-bottom: 0;
+}
+
+.stat .label .en {
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.stat .label .zh {
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 11px;
+  color: var(--ink);
+  opacity: 0.85;
 }
 
 .stat .value {
@@ -419,6 +432,40 @@ button {
   font-size: 13px;
   font-weight: 600;
   text-align: right;
+  padding-top: 1px;
+}
+
+.stat-hint {
+  margin: 0 0 10px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--ink-muted);
+}
+
+.zh-block {
+  display: block;
+  margin-top: 2px;
+  color: var(--ink);
+  opacity: 0.9;
+}
+
+.zh-inline {
+  font-weight: 400;
+}
+
+.zh-title {
+  font-weight: 600;
+  color: var(--ink-muted);
+  font-size: 0.8rem;
+}
+
+.dip-block {
+  margin-bottom: 12px;
+}
+
+.dip-benches {
+  margin-top: 6px;
+  line-height: 1.55;
 }
 
 .weight-bars {
@@ -570,11 +617,24 @@ button {
   font-weight: 600;
 }
 
+.action-item .action-verb {
+  margin: 6px 0 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
 .action-item .reason,
 .idea-card p {
   margin: 6px 0 0;
   font-size: 13px;
   color: var(--ink-muted);
+}
+
+.action-item p.zh {
+  margin-top: 2px;
+  color: var(--ink);
+  opacity: 0.92;
 }
 
 .idea-card p strong {

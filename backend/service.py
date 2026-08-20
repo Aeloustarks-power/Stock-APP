@@ -1159,6 +1159,7 @@ from backend.ai import (
     build_suggested_buys_prompt as _build_suggested_buys_prompt,
     format_ai_note as _format_ai_note,
 )
+from backend.webhooks import post_ideas_webhook
 
 
 def run_portfolio_analysis(
@@ -1333,6 +1334,11 @@ def run_portfolio_analysis(
     ai_note, ai_last_error = _generate_ai_summary(gemini, policy_report)
     ai_summary = _format_ai_note(ai_note)
     suggested_buys, suggest_error = _generate_suggested_buys(gemini, policy_report)
+    webhook = post_ideas_webhook(
+        portfolio_id=resolved_id,
+        source="analyze",
+        ideas=suggested_buys,
+    )
     if suggest_error and not ai_last_error:
         # Non-fatal note for UI
         pass
@@ -1358,6 +1364,7 @@ def run_portfolio_analysis(
         "suggested_buys": suggested_buys,
         "sector_breakdown": sector_breakdown,
         "snapshot_meta": snapshot_store_meta(),
+        "webhook": webhook,
     }
 
 
@@ -1454,12 +1461,18 @@ def run_idea_search(
     suggested_buys, suggest_error = _generate_suggested_buys(
         gemini, policy_report, extra_exclude=extra_exclude or []
     )
+    webhook = post_ideas_webhook(
+        portfolio_id=resolved_id,
+        source="ideas",
+        ideas=suggested_buys,
+    )
     return {
         "suggested_buys": suggested_buys,
         "suggest_error": suggest_error,
         "excluded": sorted(
             {_normalize_symbol(str(s)) for s in (extra_exclude or []) if s}
         ),
+        "webhook": webhook,
     }
 
 

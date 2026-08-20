@@ -27,7 +27,6 @@ export default function AnalysisPane({
   sectorBreakdown,
   ruleActions,
   suggestedBuys,
-  aiAnalysis,
   aiNote,
   holdingsMix,
   dip,
@@ -44,6 +43,7 @@ export default function AnalysisPane({
   editing,
   onMoreIdeas,
   moreLoading,
+  webhook,
   savedAt,
 }) {
   return (
@@ -93,10 +93,11 @@ export default function AnalysisPane({
             suggestedBuys={suggestedBuys}
             onMoreIdeas={onMoreIdeas}
             moreLoading={moreLoading}
+            webhook={webhook}
           />
         )}
         {activeTab === 'ai' && (
-          <AiTab loading={loading} note={aiNote} analysis={aiAnalysis} />
+          <AiTab loading={loading} note={aiNote} />
         )}
         {activeTab === 'tools' && (
           <ToolsTab

@@ -5,7 +5,17 @@ export default function IdeasTab({
   suggestedBuys,
   onMoreIdeas,
   moreLoading,
+  webhook,
 }) {
+  let webhookNote = '';
+  if (webhook && webhook.skipped) {
+    webhookNote = 'Sheet webhook is off (no IDEAS_WEBHOOK_URL).';
+  } else if (webhook && webhook.ok) {
+    webhookNote = 'Posted this batch to your Google web app.';
+  } else if (webhook && webhook.ok === false) {
+    webhookNote = `Webhook failed${webhook.error ? `: ${webhook.error}` : ''}. Ideas on this page are still saved.`;
+  }
+
   return (
     <>
       <div className="ideas-toolbar">
@@ -21,6 +31,7 @@ export default function IdeasTab({
           Skips holdings and names already shown this visit. Catalyst + risk from Gemini.
         </span>
       </div>
+      {webhookNote ? <p className="meta">{webhookNote}</p> : null}
       {!loading && !moreLoading && suggestedBuys.length === 0 && (
         <p className="empty">Tap More ideas (or Analyze) for portfolio-aware suggested buys.</p>
       )}

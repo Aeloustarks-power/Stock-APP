@@ -116,6 +116,7 @@ function App() {
   const [dip, setDip] = useState(null);
   const [cashFloorPct, setCashFloorPct] = useState(0.15);
   const [whyNoActions, setWhyNoActions] = useState([]);
+  const [ideasWebhook, setIdeasWebhook] = useState(null);
 
   const fetchPortfolio = useCallback(async () => {
     setPortfolioLoading(true);
@@ -412,6 +413,7 @@ function App() {
       setCashFloorPct(nextFloor);
       setWhyNoActions(nextWhy);
       setAiError(data?.ai_error || data?.suggest_error || null);
+      setIdeasWebhook(data?.webhook || null);
       const stored = saveLastAnalysis(selectedPortfolio, {
         aiAnalysis: nextAnalysis,
         aiNote: nextNote,
@@ -471,6 +473,7 @@ function App() {
       })();
       setSeenIdeaSymbols(seenList);
       if (data?.suggest_error) setAiError(data.suggest_error);
+      setIdeasWebhook(data?.webhook || null);
       const stored = saveLastAnalysis(selectedPortfolio, {
         suggestedBuys: next,
         seenIdeaSymbols: seenList,
@@ -625,7 +628,6 @@ function App() {
           sectorBreakdown={sectorBreakdown}
           ruleActions={ruleActions}
           suggestedBuys={suggestedBuys}
-          aiAnalysis={aiAnalysis}
           aiNote={aiNote}
           holdingsMix={holdingsMix}
           dip={dip}
@@ -642,6 +644,7 @@ function App() {
           editing={editingHoldings}
           onMoreIdeas={handleMoreIdeas}
           moreLoading={ideasLoading}
+          webhook={ideasWebhook}
           savedAt={analysisSavedAt}
         />
       </div>
