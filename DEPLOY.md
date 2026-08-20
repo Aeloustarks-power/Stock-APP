@@ -38,6 +38,8 @@ Pushing to GitHub can auto-update both once connected.
    - `GEMINI_API_KEY`
    - `GEMINI_MODEL=gemini-2.5-flash` (free-tier safe; Pro models need Google AI billing)
    - `CORS_ALLOW_ORIGINS=https://YOUR-SITE.netlify.app` (set after Netlify exists; `*` works for a quick test)
+   - `SITE_PASSWORD` (optional)
+   - `IDEAS_WEBHOOK_URL` — Google Apps Script web app `/exec` URL so More ideas / Analyze POST a JSON batch to your Sheet. Leave empty to disable. See `scripts/ideas_to_google_sheet.gs`.
 6. Deploy. Copy the service URL, e.g. `https://us-stock-api.onrender.com`.
 7. Smoke test: open `https://YOUR-API.onrender.com/docs`
 

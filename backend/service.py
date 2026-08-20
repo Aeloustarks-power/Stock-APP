@@ -1,9 +1,13 @@
+"""HTTP app, policy rules, and analysis orchestration.
+
+Market quotes/snapshots live in backend.market; holdings/Supabase in backend.portfolio;
+Gemini in backend.ai. This file wires them together.
+"""
 from __future__ import annotations
 
 import hashlib
 import hmac
 import os
-import time
 from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple, TYPE_CHECKING
@@ -38,11 +42,6 @@ except Exception:  # pragma: no cover
     JSONResponse = None  # type: ignore
 
 try:
-    from google import genai  # type: ignore
-except Exception:  # pragma: no cover
-    genai = None  # type: ignore
-
-try:
     from pydantic import BaseModel, Field, field_validator  # type: ignore
 except Exception:  # pragma: no cover
     BaseModel = object  # type: ignore
@@ -54,10 +53,6 @@ try:
 except Exception:  # pragma: no cover
     PostgrestAPIError = None  # type: ignore
 
-try:
-    from supabase import create_client  # type: ignore
-except Exception:  # pragma: no cover
-    create_client = None  # type: ignore
 
 
 def _project_root() -> str:
@@ -81,6 +76,29 @@ def _load_env() -> None:
 
 
 _load_env()
+
+from backend.portfolio import (
+    PortfolioPayload,
+    PortfolioReplacePayload,
+    PortfolioResponse,
+    _create_supabase_client,
+    _extract_cash_from_rows,
+    _normalize_portfolio_id_value,
+    _portfolio_id_from_env,
+    _portfolio_sector_from_row,
+    _postgrest_error_message,
+    _row_matches_portfolio,
+    _try_persist_portfolio_sector,
+)
+from backend.market import (
+    _calc_position_metrics_cached,
+    _download_history_cached,
+    _stock_quote_payload,
+    _yfinance_sector_label,
+    get_symbol_snapshot,
+    refresh_market_snapshots,
+    snapshot_store_meta,
+)
 
 
 def hello(name: str) -> str:
@@ -297,65 +315,12 @@ def _is_cash_symbol(symbol: str) -> bool:
     return _normalize_symbol(symbol) in _CASH_SYMBOLS
 
 
-def _normalize_portfolio_id_value(v: Any) -> Optional[str]:
-    """String portfolio ids (e.g. 'Eric'); supports numeric ids stored as int/str in DB."""
-    if v is None or v == "":
-        return None
-    s = str(v).strip()
-    return s if s else None
-
-
-def _coerce_portfolio_id_field(v: Any) -> Optional[str]:
-    """For JSON bodies: accept scalars; reject objects/arrays so Pydantic does not fail on wrong shapes."""
-    if v is None:
-        return None
-    if isinstance(v, (list, tuple, set, dict)):
-        return None
-    return _normalize_portfolio_id_value(v)
-
-
 # Module-level models so FastAPI + Pydantic v2 TypeAdapter(Body(...)) resolve fully;
 # nested classes inside create_app() trigger ForwardRef / "class not fully defined" errors.
 if BaseModel is not object and Field is not None and field_validator is not None:
-    class PortfolioPayload(BaseModel):
-        symbol: str
-        shares: float = Field(gt=0)
-        cost_basis: float = Field(ge=0)
-        portfolio_id: Optional[str] = None
-
-        @field_validator("portfolio_id", mode="before")
-        @classmethod
-        def _portfolio_id_from_json(cls, v: Any) -> Optional[str]:
-            return _coerce_portfolio_id_field(v)
-
-    class PortfolioHoldingItem(BaseModel):
-        symbol: str
-        shares: float = Field(gt=0)
-        cost_basis: float = Field(ge=0)
-
-    class PortfolioReplacePayload(BaseModel):
-        """Full portfolio replace: holdings + cash in one save."""
-
-        holdings: List[PortfolioHoldingItem] = Field(default_factory=list)
-        cash_usd: float = Field(ge=0, default=0.0)
-        portfolio_id: Optional[str] = None
-
-        @field_validator("portfolio_id", mode="before")
-        @classmethod
-        def _portfolio_id_from_json(cls, v: Any) -> Optional[str]:
-            return _coerce_portfolio_id_field(v)
-
-    class PortfolioResponse(BaseModel):
-        items: List[Dict[str, Any]]
-        cash_usd: float = 0.0
-
     class LoginPayload(BaseModel):
         password: str = ""
 else:  # pragma: no cover
-    PortfolioPayload = None  # type: ignore[misc, assignment]
-    PortfolioHoldingItem = None  # type: ignore[misc, assignment]
-    PortfolioReplacePayload = None  # type: ignore[misc, assignment]
-    PortfolioResponse = None  # type: ignore[misc, assignment]
     LoginPayload = None  # type: ignore[misc, assignment]
 
 
@@ -397,32 +362,6 @@ def _format_pydantic_request_errors(errors: Any) -> str:
         elif msg:
             parts.append(msg)
     return "; ".join(parts) if parts else "Invalid request"
-
-
-def _postgrest_error_message(exc: Any) -> str:
-    """Readable message from Supabase PostgREST client errors (often surface as HTTP 400/409/422)."""
-    parts: List[str] = []
-    for attr in ("message", "details", "hint", "code"):
-        val = getattr(exc, attr, None)
-        if val:
-            parts.append(str(val))
-    if parts:
-        return " — ".join(parts)
-    return str(exc)
-
-
-def _portfolio_id_from_env() -> Optional[str]:
-    """When set, analysis and API default to this portfolio (multi-row portfolios)."""
-    return _normalize_portfolio_id_value(os.getenv("PORTFOLIO_ID"))
-
-
-def _row_matches_portfolio(row: Dict[str, Any], portfolio_id: Optional[str]) -> bool:
-    if portfolio_id is None:
-        return True
-    rid = _normalize_portfolio_id_value(row.get("portfolio_id"))
-    if rid is None:
-        return False
-    return rid == portfolio_id
 
 
 def _safe_float(x: Any, default: float = 0.0) -> float:
@@ -473,378 +412,6 @@ def _deploy_pct_for_level(level: int, cfg: PolicyConfig) -> float:
     if level == 1:
         return cfg.deploy_pct_l1
     return 0.0
-
-
-def calculate_rsi(close_series, window: int = 14):
-    delta = close_series.diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=window).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=window).mean()
-    rs = gain / loss
-    return 100 - (100 / (1 + rs))
-
-
-def _stock_quote_payload(symbol: str) -> Dict[str, Any]:
-    sym = _normalize_symbol(symbol)
-    if yf is None:  # pragma: no cover
-        raise RuntimeError("yfinance is not installed")
-
-    hist = yf.Ticker(sym).history(period="60d", auto_adjust=True)
-    if "Close" not in hist:
-        raise ValueError("No price history available")
-
-    close_series = hist["Close"].dropna()
-    if close_series.shape[0] < 20:
-        raise ValueError("Not enough historical data")
-
-    current_price = float(close_series.iloc[-1])
-    ma20_series = close_series.rolling(window=20).mean().dropna()
-    if ma20_series.empty:
-        raise ValueError("Unable to compute MA20")
-    ma20 = float(ma20_series.iloc[-1])
-
-    rsi_series = calculate_rsi(close_series).dropna()
-    if rsi_series.empty:
-        raise ValueError("Unable to compute RSI")
-    rsi = float(rsi_series.iloc[-1])
-
-    daily_change_pct = None
-    daily_change = None
-    if close_series.shape[0] >= 2:
-        prev = float(close_series.iloc[-2])
-        if prev != 0:
-            daily_change = current_price - prev
-            daily_change_pct = (daily_change / prev) * 100
-
-    if rsi < 35:
-        advice = "BUY - Market is Oversold (Fearful)"
-    elif rsi > 65:
-        advice = "SELL - Market is Overbought (Euphoric)"
-    elif current_price > ma20:
-        advice = "HOLD - Upward Trend"
-    else:
-        advice = "HOLD - Downward Trend"
-
-    return {
-        "symbol": sym,
-        "price": round(current_price, 2),
-        "ma20": round(ma20, 2),
-        "rsi": round(rsi, 2),
-        "advice": advice,
-        "regularMarketChangePercent": None if daily_change_pct is None else round(daily_change_pct, 4),
-        "regularMarketChange": None if daily_change is None else round(daily_change, 4),
-    }
-
-
-def _cache_get(cache: Dict[str, Any], key: str, ttl_seconds: int) -> Optional[Any]:
-    now = time.time()
-    item = cache.get(key)
-    if not item:
-        return None
-    ts, value = item
-    if now - ts > ttl_seconds:
-        return None
-    return value
-
-
-def _cache_set(cache: Dict[str, Any], key: str, value: Any) -> None:
-    cache[key] = (time.time(), value)
-
-
-_HISTORY_CACHE: Dict[str, Any] = {}
-
-# --- Market snapshot cache (file-backed) ----------------------------------------
-
-_SNAPSHOT_TTL_SECONDS = int(os.getenv("SNAPSHOT_TTL_SECONDS", str(6 * 60 * 60)))
-
-
-def _snapshot_file_path() -> str:
-    return os.path.join(_project_root(), "data", "snapshots.json")
-
-
-def _load_snapshot_store() -> Dict[str, Any]:
-    import json
-
-    path = _snapshot_file_path()
-    try:
-        with open(path, encoding="utf-8") as f:
-            data = json.load(f)
-        return data if isinstance(data, dict) else {"updated_at": None, "symbols": {}}
-    except Exception:
-        return {"updated_at": None, "symbols": {}}
-
-
-def _save_snapshot_store(store: Dict[str, Any]) -> None:
-    import json
-
-    path = _snapshot_file_path()
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(store, f, indent=2)
-    os.replace(tmp, path)
-
-
-def get_symbol_snapshot(
-    symbol: str, *, max_age_seconds: Optional[int] = None
-) -> Optional[Dict[str, Any]]:
-    sym = _normalize_symbol(symbol)
-    store = _load_snapshot_store()
-    entry = (store.get("symbols") or {}).get(sym)
-    if not isinstance(entry, dict):
-        return None
-    ts = _safe_float(entry.get("ts"), 0.0)
-    ttl = _SNAPSHOT_TTL_SECONDS if max_age_seconds is None else max_age_seconds
-    if ttl > 0 and (time.time() - ts) > ttl:
-        return None
-    metrics = entry.get("metrics")
-    return metrics if isinstance(metrics, dict) else None
-
-
-def snapshot_store_meta() -> Dict[str, Any]:
-    store = _load_snapshot_store()
-    symbols = store.get("symbols") or {}
-    return {
-        "updated_at": store.get("updated_at"),
-        "symbol_count": len(symbols) if isinstance(symbols, dict) else 0,
-        "ttl_seconds": _SNAPSHOT_TTL_SECONDS,
-    }
-
-
-def refresh_market_snapshots(
-    symbols: Optional[Sequence[str]] = None,
-    *,
-    include_benchmarks: bool = True,
-    include_universe: bool = False,
-) -> Dict[str, Any]:
-    """Fetch Yahoo metrics and persist to data/snapshots.json."""
-    store = _load_snapshot_store()
-    sym_map: Dict[str, Any] = dict(store.get("symbols") or {})
-    targets: List[str] = []
-    if symbols:
-        targets.extend(_normalize_symbol(s) for s in symbols)
-    if include_benchmarks:
-        targets.extend(["QQQ", "SPY"])
-    if include_universe:
-        targets.extend(list(nasdaq100_universe()))
-    targets = list(dict.fromkeys(t for t in targets if t and not _is_cash_symbol(t)))
-
-    errors: List[str] = []
-    updated = 0
-    now = time.time()
-    for sym in targets:
-        try:
-            metrics = _calc_position_metrics(sym, shares=1.0, cost_basis=0.0)
-            snap = {
-                "symbol": metrics["symbol"],
-                "current_price": metrics["current_price"],
-                "ma20": metrics["ma20"],
-                "rsi": metrics["rsi"],
-                "high_52w_percentile": metrics["high_52w_percentile"],
-                "near_52w_high_pct": metrics["near_52w_high_pct"],
-            }
-            sym_map[sym] = {"ts": now, "metrics": snap}
-            updated += 1
-        except Exception as e:
-            errors.append(f"{sym}: {e}")
-
-    store = {
-        "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)),
-        "symbols": sym_map,
-    }
-    _save_snapshot_store(store)
-    return {
-        "updated_at": store["updated_at"],
-        "updated_count": updated,
-        "requested_count": len(targets),
-        "errors": errors[:20],
-        "symbol_count": len(sym_map),
-    }
-
-
-def _calc_position_metrics_cached(
-    symbol: str, shares: float, cost_basis: float, *, force_live: bool = False
-) -> Dict[str, Any]:
-    """Prefer snapshot for price/RSI/MA; recompute P&L from shares/cost."""
-    if not force_live:
-        snap = get_symbol_snapshot(symbol)
-        if snap and snap.get("current_price") is not None:
-            current = _safe_float(snap.get("current_price"))
-            position_value = shares * current
-            total_cost = shares * cost_basis
-            return {
-                "symbol": _normalize_symbol(symbol),
-                "shares": shares,
-                "cost_basis": cost_basis,
-                "current_price": round(current, 2),
-                "ma20": round(_safe_float(snap.get("ma20")), 2),
-                "rsi": round(_safe_float(snap.get("rsi")), 2),
-                "position_value": round(position_value, 2),
-                "total_cost": round(total_cost, 2),
-                "pnl": round(position_value - total_cost, 2),
-                "high_52w_percentile": round(
-                    _safe_float(snap.get("high_52w_percentile")), 4
-                ),
-                "near_52w_high_pct": round(_safe_float(snap.get("near_52w_high_pct")), 4),
-                "from_snapshot": True,
-            }
-    live = _calc_position_metrics(symbol, shares, cost_basis)
-    live["from_snapshot"] = False
-    return live
-
-
-def _download_history_cached(
-    tickers: Sequence[str],
-    *,
-    period: str,
-    interval: str = "1d",
-    ttl_seconds: int = 6 * 60 * 60,
-):
-    key = f"hist:{interval}:{period}:{','.join(tickers)}"
-    cached = _cache_get(_HISTORY_CACHE, key, ttl_seconds=ttl_seconds)
-    if cached is not None:
-        return cached
-    if yf is None:  # pragma: no cover
-        raise RuntimeError("yfinance is not installed")
-    data = yf.download(
-        list(tickers),
-        period=period,
-        interval=interval,
-        auto_adjust=True,
-        group_by="ticker",
-        threads=True,
-        progress=False,
-    )
-    _cache_set(_HISTORY_CACHE, key, data)
-    return data
-
-
-def _get_single_close_history(symbol: str, period: str):
-    data = _download_history_cached([symbol], period=period)
-    if isinstance(data.columns, list) or len(getattr(data, "columns", [])) == 0:
-        return data
-    # When only one ticker is requested, yfinance returns single-level columns.
-    return data
-
-
-def _position_52w_high_percentile(history_1y) -> Tuple[float, float, float]:
-    """
-    Returns (pctile_in_range_0_1, close, high_52w).
-    pctile is (close - low) / (high - low), clamped.
-    """
-    close_series = history_1y["Close"].dropna()
-    if close_series.empty:
-        return 0.0, 0.0, 0.0
-    close = float(close_series.iloc[-1])
-    high = float(close_series.max())
-    low = float(close_series.min())
-    denom = max(1e-9, high - low)
-    pctile = max(0.0, min(1.0, (close - low) / denom))
-    return pctile, close, high
-
-
-def _extract_cash_from_rows(
-    rows: List[Dict[str, Any]],
-    *,
-    portfolio_id: Optional[str] = None,
-) -> Tuple[float, List[Dict[str, Any]]]:
-    """
-    Supports an optional CASH row inside the same table:
-      - symbol == CASH or USD treated as cash balance in 'shares' (USD).
-    When portfolio_id is set, only rows with matching portfolio_id are used (multi-tenant).
-    If no cash rows contribute a positive total, falls back to PORTFOLIO_CASH_USD env (default 0).
-    """
-    cash = 0.0
-    keep: List[Dict[str, Any]] = []
-    for r in rows:
-        if not _row_matches_portfolio(r, portfolio_id):
-            continue
-        sym = _normalize_symbol(str(r.get("symbol", "")))
-        if _is_cash_symbol(sym):
-            cash += _safe_float(r.get("shares", 0.0), 0.0)
-            continue
-        keep.append(r)
-    if cash <= 0.0:
-        cash = _safe_float(os.getenv("PORTFOLIO_CASH_USD", "0"), 0.0)
-    return cash, keep
-
-
-def _calc_position_metrics(symbol: str, shares: float, cost_basis: float) -> Dict[str, Any]:
-    sym = _normalize_symbol(symbol)
-    if yf is None:  # pragma: no cover
-        raise RuntimeError("yfinance is not installed")
-    hist = yf.Ticker(sym).history(period="1y", auto_adjust=True)
-    if "Close" not in hist or hist["Close"].dropna().shape[0] < 60:
-        raise ValueError(f"{sym}: not enough price history.")
-
-    close_series = hist["Close"].dropna()
-    current = float(close_series.iloc[-1])
-    ma20 = float(close_series.rolling(window=20).mean().iloc[-1])
-    rsi = float(calculate_rsi(close_series).iloc[-1])
-
-    pctile, _, high_52w = _position_52w_high_percentile(hist)
-    near_high = 0.0 if high_52w <= 0 else (high_52w - current) / high_52w
-
-    position_value = shares * current
-    total_cost = shares * cost_basis
-    pnl = position_value - total_cost
-
-    return {
-        "symbol": sym,
-        "shares": shares,
-        "cost_basis": cost_basis,
-        "current_price": round(current, 2),
-        "ma20": round(ma20, 2),
-        "rsi": round(rsi, 2),
-        "position_value": round(position_value, 2),
-        "total_cost": round(total_cost, 2),
-        "pnl": round(pnl, 2),
-        "high_52w_percentile": round(pctile, 4),
-        "near_52w_high_pct": round(near_high, 4),
-    }
-
-
-def _portfolio_sector_from_row(row: Dict[str, Any]) -> Optional[str]:
-    raw = row.get("sector")
-    if raw is None:
-        return None
-    s = str(raw).strip()
-    return s if s else None
-
-
-def _yfinance_sector_label(symbol: str) -> str:
-    """Sector (or industry) from Yahoo metadata; 'Unknown' if missing or on error."""
-    sym = _normalize_symbol(symbol)
-    if yf is None:  # pragma: no cover
-        return "Unknown"
-    try:
-        info = yf.Ticker(sym).info or {}
-        raw = info.get("sector") or info.get("industry") or ""
-        s = str(raw).strip()
-        return s if s else "Unknown"
-    except Exception:
-        return "Unknown"
-
-
-def _try_persist_portfolio_sector(
-    sb: Any,
-    portfolio_table: str,
-    symbol: str,
-    sector: str,
-    *,
-    portfolio_id: Optional[str] = None,
-) -> None:
-    """Write sector to Supabase when we learned it from the network (column must exist)."""
-    if _bool_env("SUPABASE_SKIP_SECTOR_PERSIST", False):
-        return
-    if not sector or sector == "Unknown":
-        return
-    try:
-        q = sb.table(portfolio_table).update({"sector": sector}).eq("symbol", symbol)
-        if portfolio_id is not None:
-            q = q.eq("portfolio_id", portfolio_id)
-        q.execute()
-    except Exception:
-        pass
 
 
 def _sector_breakdown(positions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -1186,124 +753,6 @@ def _policy_actions(
         "recommended_actions": actions,
         "notes": notes,
     }
-
-
-def _build_ai_prompt(policy_report: Dict[str, Any]) -> str:
-    pol = policy_report.get("policy") or {}
-    actions = pol.get("recommended_actions", [])
-    qqq = policy_report.get("qqq", {})
-    spy = policy_report.get("spy", {})
-    combined = int(policy_report.get("combined_dip_level", 0))
-    why_no_other = policy_report.get("why_no_other_actions", [])
-    uncertainty_notes = policy_report.get("uncertainty_notes", [])
-    totals = pol.get("totals", {})
-    constraints = pol.get("constraints", {})
-    positions = list(policy_report.get("positions") or [])
-    sectors = list(policy_report.get("sector_breakdown") or [])
-    notes = list(pol.get("notes") or [])
-    warnings = list(policy_report.get("warnings") or [])
-    holdings_count = int(pol.get("holdings_count", len({p.get("symbol") for p in positions}) or 0))
-    max_new_buys = int(pol.get("max_new_buys", 0))
-
-    def fmt_action(a: Dict[str, Any]) -> str:
-        sym = a.get("symbol", "?")
-        typ = a.get("type", "?")
-        usd = a.get("trade_usd", 0)
-        sh = a.get("approx_shares", 0)
-        r = a.get("reason", "")
-        rule = a.get("rule_trigger", "n/a")
-        return f"- {sym}: {typ}, ${usd} (~{sh} sh). {r} (Rule: {rule})"
-
-    lines = [fmt_action(a) for a in actions[:10]]
-
-    pos_sorted = sorted(positions, key=lambda p: -_safe_float(p.get("weight_pct"), 0.0))[:8]
-    pos_lines: List[str] = []
-    for p in pos_sorted:
-        sym = p.get("symbol", "?")
-        w = _safe_float(p.get("weight_pct"), 0.0)
-        val = _safe_float(p.get("position_value"), 0.0)
-        pnl = _safe_float(p.get("pnl"), 0.0)
-        rsi = _safe_float(p.get("rsi"), 0.0)
-        px = _safe_float(p.get("current_price"), 0.0)
-        ma = _safe_float(p.get("ma20"), 0.0)
-        vs = "above MA20" if px >= ma else "below MA20"
-        pos_lines.append(
-            f"- {sym}: weight {w:.2f}%, value ${val:,.0f}, P/L ${pnl:+,.0f}, RSI {rsi:.0f}, {vs}"
-        )
-
-    sec_lines = [
-        f"- {s.get('sector', '?')}: {s.get('weight_pct', 0):.1f}% (${s.get('value', 0):,.0f})"
-        for s in sectors[:6]
-    ]
-
-    q_close = qqq.get("close")
-    s_close = spy.get("close")
-    bench = ""
-    if q_close is not None and s_close is not None:
-        bench = f"- QQQ last ${q_close}, SPY last ${s_close}"
-
-    return f"""You are a portfolio assistant. Use the numbers and tickers below for portfolio-specific commentary; do NOT fabricate metrics.
-Write EVERY commentary line in bilingual form: English first, then Simplified Chinese on the same numbered item.
-Format each line like: `1) Status: OK / Attention / Action — 状态：正常 / 关注 / 行动`
-Keep ticker symbols (AAPL, QQQ, etc.) in English. Do NOT invent prices or metrics.
-Only in the final watchlist line may you mention 1–2 additional well-known U.S. tickers (not already listed) if you justify them with a brief macro catalyst.
-
-Policy:
-- Cash floor: {constraints.get('cash_floor_pct', 0.15)*100:.0f}% (do not recommend buys that drop below it)
-- Max holdings: {constraints.get('max_holdings', 18)}
-- Min trade: ${constraints.get('min_trade_usd', 200):.0f}
-
-Today:
-- Portfolio value: ${totals.get('total_value', 0):.2f} (invested ${totals.get('total_invested', 0):.2f})
-- Cash: ${totals.get('cash_usd', 0):.2f} ({totals.get('cash_pct', 0):.2f}%)
-- Cash needed to reach floor: ${totals.get('cash_needed_usd', 0):.2f}
-- Excess cash above floor: ${totals.get('excess_cash_usd', 0):.2f}
-- Deploy budget (rules): ${totals.get('deploy_budget_usd', 0):.2f}
-- Holdings: {holdings_count} / max {constraints.get('max_holdings', 18)}, new-buy slots: {max_new_buys}
-- Dip level (dual benchmark): L{combined} (max of QQQ/SPY)
-- QQQ: L{qqq.get('dip_level', 0)} (6M {qqq.get('drawdown_6m_pct', 0):.2f}%, 12M {qqq.get('drawdown_12m_pct', 0):.2f}%)
-- SPY: L{spy.get('dip_level', 0)} (6M {spy.get('drawdown_6m_pct', 0):.2f}%, 12M {spy.get('drawdown_12m_pct', 0):.2f}%)
-{bench}
-
-Recommended actions (already computed; you prioritize and explain):
-{chr(10).join(lines) if lines else "- (none)"}
-
-Top holdings (reference for narrative):
-{chr(10).join(pos_lines) if pos_lines else "- (none)"}
-
-Sector mix:
-{chr(10).join(sec_lines) if sec_lines else "- Unknown / not grouped"}
-
-Policy engine notes:
-{chr(10).join(f"- {n}" for n in notes) if notes else "- (none)"}
-
-Why no other actions:
-{chr(10).join(f"- {x}" for x in why_no_other) if why_no_other else "- (n/a)"}
-
-Uncertainty / confidence:
-{chr(10).join(f"- {x}" for x in uncertainty_notes) if uncertainty_notes else "- Data looks complete; monitoring only."}
-
-Data warnings:
-{chr(10).join(f"- {w}" for w in warnings) if warnings else "- (none)"}
-
-Output format (numbered lines, no markdown tables; each item MUST include English then 中文):
-1) Status: ...
-2) Market: ...
-3) Cash: ...
-4) Actions: line 1 — "SYMBOL — ACTION — $ — ~shares — (Rule: ...)" or (none)
-5) Actions: line 2 — same format or (none)
-6) Actions: line 3 — same format or (none)
-7) Why: ...
-8) Uncertainty: ...
-9) Disclaimer: Not financial advice; rules are heuristic. — 非投资建议；规则仅为启发式。
-10) Portfolio: ...
-11) Holdings: 2–4 short lines on top names by weight (symbols from "Top holdings" only)
-12) Sectors: 1–2 lines on mix (or note if sector data is mostly Unknown)
-13) Risks / data: ...
-14) Optional: one line on RSI/MA20 for a top holding if notable (numbers from the list only)
-15) Watchlist: "Ticker — theme" for 1–2 potential buys outside the current portfolio (bilingual justification, no fabricated prices)
-Keep total under ~30 short lines; stay factual.
-"""
 
 
 def rules_only_summary_from_policy(policy_report: Dict[str, Any]) -> str:
@@ -1701,228 +1150,16 @@ def rich_policy_appendix(policy_report: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def _gemini_model_name() -> str:
-    return (
-        # Free-tier friendly default. gemini-3.1-pro* is paid-only (quota limit 0 on free).
-        os.getenv("GEMINI_MODEL", "gemini-2.5-flash") or "gemini-2.5-flash"
-    ).split("/")[-1]
-
-
-def _ai_output_lang() -> str:
-    """Kept for compatibility. AI output is bilingual (en + zh)."""
-    return "bilingual"
-
-
-def _screen_buy_candidates(
-    policy_report: Dict[str, Any],
-    *,
-    limit: int = 15,
-) -> List[Dict[str, Any]]:
-    """
-    Mechanical Nasdaq-100 shortlist for AI to rank (not invent tickers).
-    Prefer liquid names off 52w highs with positive 1y trend.
-    """
-    positions = list(policy_report.get("positions") or [])
-    held = {_normalize_symbol(str(p.get("symbol", ""))) for p in positions if p.get("symbol")}
-    return _rank_new_candidates(held, limit=limit)
-
-
-def _build_suggested_buys_prompt(
-    policy_report: Dict[str, Any],
-    candidates: List[Dict[str, Any]],
-) -> str:
-    pol = policy_report.get("policy") or {}
-    totals = pol.get("totals") or {}
-    constraints = pol.get("constraints") or {}
-    positions = list(policy_report.get("positions") or [])
-    sectors = list(policy_report.get("sector_breakdown") or [])
-    held = sorted({_normalize_symbol(str(p.get("symbol", ""))) for p in positions if p.get("symbol")})
-    pos_lines = [
-        f"- {p.get('symbol')}: weight { _safe_float(p.get('weight_pct')):.1f}%, "
-        f"sector {p.get('sector', 'Unknown')}, RSI {_safe_float(p.get('rsi')):.0f}"
-        for p in sorted(positions, key=lambda x: -_safe_float(x.get("weight_pct")))[:12]
-    ]
-    sec_lines = [
-        f"- {s.get('sector')}: { _safe_float(s.get('weight_pct')):.1f}%"
-        for s in sectors[:8]
-    ]
-    cand_lines = []
-    for c in candidates:
-        cand_lines.append(
-            f"- {c.get('symbol')}: screen_score={c.get('score')}, "
-            f"dd_from_high={c.get('drawdown_from_52w_high_pct')}%, "
-            f"ret_1y={c.get('return_1y_pct')}%, "
-            f"avg_$vol_30d={c.get('avg_dollar_vol_30d')}"
-        )
-    return f"""You are a US equities portfolio research assistant.
-Task: RANK 2-3 tickers ONLY from the screened candidate list below. Do NOT invent tickers outside that list.
-Near-duplicates of holdings are forbidden (e.g. no GOOG if GOOGL is held).
-Use Google Search for recent catalysts (earnings, product, regulation, sector rotation). Do NOT invent prices.
-Every narrative field must be bilingual: provide English AND Simplified Chinese (separate keys).
-
-Already held: {', '.join(held) or '(none)'}
-
-Portfolio context:
-- Total value ${ _safe_float(totals.get('total_value')):,.0f}, cash ${ _safe_float(totals.get('cash_usd')):,.0f} ({ _safe_float(totals.get('cash_pct')):.1f}%)
-- Excess cash ${ _safe_float(totals.get('excess_cash_usd')):,.0f}, deploy budget ${ _safe_float(totals.get('deploy_budget_usd')):,.0f}
-- Dip level L{int(policy_report.get('combined_dip_level', 0))}, holdings {pol.get('holdings_count')}/{constraints.get('max_holdings', 18)}
-- Cash floor { _safe_float(constraints.get('cash_floor_pct'), 0.15)*100:.0f}%
-
-Top holdings:
-{chr(10).join(pos_lines) if pos_lines else '- (none)'}
-
-Sector mix:
-{chr(10).join(sec_lines) if sec_lines else '- Unknown'}
-
-Screened candidates (CHOOSE ONLY FROM THESE):
-{chr(10).join(cand_lines) if cand_lines else '- (none — return empty suggestions)'}
-
-Return ONLY valid JSON (no markdown fences) with this shape:
-{{
-  "suggestions": [
-    {{
-      "symbol": "TICKER",
-      "thesis": "English one sentence",
-      "thesis_zh": "中文一句话",
-      "fit": "English why it fits THIS portfolio",
-      "fit_zh": "中文：为何适合当前组合",
-      "catalyst": "English recent searchable catalyst",
-      "catalyst_zh": "中文近期催化剂",
-      "risk": "English key risk",
-      "risk_zh": "中文主要风险",
-      "confidence": 0.0
-    }}
-  ]
-}}
-confidence is 0-1. Prefer names that fill a sector/theme gap vs this portfolio, with a real recent catalyst.
-If the candidate list is empty, return {{"suggestions": []}}.
-"""
-
-
-def _parse_suggested_buys_json(text: str) -> List[Dict[str, Any]]:
-    import json
-    import re
-
-    raw = (text or "").strip()
-    if not raw:
-        return []
-    fence = re.search(r"```(?:json)?\s*([\s\S]*?)```", raw, re.I)
-    if fence:
-        raw = fence.group(1).strip()
-    try:
-        data = json.loads(raw)
-    except Exception:
-        start = raw.find("{")
-        end = raw.rfind("}")
-        if start < 0 or end <= start:
-            return []
-        try:
-            data = json.loads(raw[start : end + 1])
-        except Exception:
-            return []
-    items = data.get("suggestions") if isinstance(data, dict) else data
-    if not isinstance(items, list):
-        return []
-    out: List[Dict[str, Any]] = []
-    for item in items:
-        if not isinstance(item, dict):
-            continue
-        sym = _normalize_symbol(str(item.get("symbol", "")))
-        if not sym or _is_cash_symbol(sym):
-            continue
-        out.append(
-            {
-                "symbol": sym,
-                "thesis": str(item.get("thesis") or "").strip(),
-                "thesis_zh": str(item.get("thesis_zh") or "").strip(),
-                "fit": str(item.get("fit") or "").strip(),
-                "fit_zh": str(item.get("fit_zh") or "").strip(),
-                "catalyst": str(item.get("catalyst") or "").strip(),
-                "catalyst_zh": str(item.get("catalyst_zh") or "").strip(),
-                "risk": str(item.get("risk") or "").strip(),
-                "risk_zh": str(item.get("risk_zh") or "").strip(),
-                "confidence": round(min(1.0, max(0.0, _safe_float(item.get("confidence"), 0.5))), 3),
-                "source": "gemini_grounded_screen_rank",
-            }
-        )
-    return out[:3]
-
-
-def _enrich_suggested_buys(
-    suggestions: List[Dict[str, Any]], *, held: set
-) -> List[Dict[str, Any]]:
-    enriched: List[Dict[str, Any]] = []
-    for s in suggestions:
-        sym = s["symbol"]
-        if sym in held:
-            continue
-        row = dict(s)
-        try:
-            metrics = _calc_position_metrics_cached(sym, 1.0, 0.0)
-            row["metrics"] = {
-                "price": metrics.get("current_price"),
-                "ma20": metrics.get("ma20"),
-                "rsi": metrics.get("rsi"),
-                "high_52w_percentile": metrics.get("high_52w_percentile"),
-                "near_52w_high_pct": metrics.get("near_52w_high_pct"),
-            }
-        except Exception as e:
-            row["metrics"] = None
-            row["metrics_error"] = str(e)
-        enriched.append(row)
-    return enriched
-
-
-def _generate_ai_summary(gemini: Any, policy_report: Dict[str, Any]) -> Tuple[str, str]:
-    if not gemini or genai is None:
-        return "", "Gemini is not configured (set GEMINI_API_KEY)."
-    try:
-        prompt = _build_ai_prompt(policy_report)
-        model = _gemini_model_name()
-        resp = gemini.models.generate_content(model=model, contents=prompt)
-        return (resp.text or "").strip(), ""
-    except Exception as e:
-        return "", str(e)
-
-
-def _generate_suggested_buys(gemini: Any, policy_report: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], str]:
-    if not gemini or genai is None:
-        return [], "Gemini is not configured (set GEMINI_API_KEY)."
-    held = {
-        _normalize_symbol(str(p.get("symbol", "")))
-        for p in (policy_report.get("positions") or [])
-        if p.get("symbol")
-    }
-    candidates = _screen_buy_candidates(policy_report, limit=15)
-    allowed = {_normalize_symbol(str(c.get("symbol", ""))) for c in candidates if c.get("symbol")}
-    try:
-        from google.genai import types  # type: ignore
-
-        prompt = _build_suggested_buys_prompt(policy_report, candidates)
-        model = _gemini_model_name()
-        config = types.GenerateContentConfig(
-            tools=[types.Tool(google_search=types.GoogleSearch())],
-            temperature=0.4,
-        )
-        resp = gemini.models.generate_content(
-            model=model, contents=prompt, config=config
-        )
-        parsed = _parse_suggested_buys_json(resp.text or "")
-        if allowed:
-            parsed = [s for s in parsed if s.get("symbol") in allowed]
-        return _enrich_suggested_buys(parsed, held=held), ""
-    except Exception as e:
-        # Retry without grounding if tool config fails
-        try:
-            prompt = _build_suggested_buys_prompt(policy_report, candidates)
-            model = _gemini_model_name()
-            resp = gemini.models.generate_content(model=model, contents=prompt)
-            parsed = _parse_suggested_buys_json(resp.text or "")
-            if allowed:
-                parsed = [s for s in parsed if s.get("symbol") in allowed]
-            return _enrich_suggested_buys(parsed, held=held), f"grounding_fallback: {e}"
-        except Exception as e2:
-            return [], str(e2)
+from backend.ai import (
+    create_gemini_client as _create_gemini_client,
+    generate_ai_summary as _generate_ai_summary,
+    generate_suggested_buys as _generate_suggested_buys,
+    gemini_model_name as _gemini_model_name,
+    build_ai_prompt as _build_ai_prompt,
+    build_suggested_buys_prompt as _build_suggested_buys_prompt,
+    format_ai_note as _format_ai_note,
+)
+from backend.webhooks import post_ideas_webhook
 
 
 def run_portfolio_analysis(
@@ -2094,8 +1331,14 @@ def run_portfolio_analysis(
         "snapshot_meta": snapshot_store_meta(),
     }
 
-    ai_summary, ai_last_error = _generate_ai_summary(gemini, policy_report)
+    ai_note, ai_last_error = _generate_ai_summary(gemini, policy_report)
+    ai_summary = _format_ai_note(ai_note)
     suggested_buys, suggest_error = _generate_suggested_buys(gemini, policy_report)
+    webhook = post_ideas_webhook(
+        portfolio_id=resolved_id,
+        source="analyze",
+        ideas=suggested_buys,
+    )
     if suggest_error and not ai_last_error:
         # Non-fatal note for UI
         pass
@@ -2111,6 +1354,7 @@ def run_portfolio_analysis(
 
     return {
         "ai_summary": ai_summary,
+        "ai_note": ai_note or {},
         "ai_error": ai_last_error,
         "suggest_error": suggest_error,
         "policy_report": policy_report,
@@ -2120,26 +1364,116 @@ def run_portfolio_analysis(
         "suggested_buys": suggested_buys,
         "sector_breakdown": sector_breakdown,
         "snapshot_meta": snapshot_store_meta(),
+        "webhook": webhook,
     }
 
 
-def _create_supabase_client() -> Optional[Client]:
-    url = os.getenv("SUPABASE_URL")
-    key = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_ANON_KEY")
-    if not url or not key:
-        return None
-    if create_client is None:  # pragma: no cover
-        raise RuntimeError("supabase is not installed")
-    return create_client(url, key)
+def run_idea_search(
+    portfolio_id: Optional[str] = None,
+    extra_exclude: Optional[Iterable[str]] = None,
+) -> Dict[str, Any]:
+    """Fresh suggested buys, skipping holdings and extra_exclude (already-shown ideas)."""
+    sb = _create_supabase_client()
+    if not sb:
+        raise RuntimeError(
+            "Supabase is not configured. Set SUPABASE_URL and SUPABASE_ANON_KEY (or SERVICE_ROLE_KEY)."
+        )
 
+    cfg = load_policy_config_from_env()
+    gemini = _create_gemini_client()
+    portfolio_table = os.getenv("SUPABASE_PORTFOLIO_TABLE", "portfolio")
+    resolved_id = (
+        _normalize_portfolio_id_value(portfolio_id)
+        if portfolio_id is not None
+        else _portfolio_id_from_env()
+    )
 
-def _create_gemini_client() -> Optional[genai.Client]:
-    api_key = os.getenv("GEMINI_API_KEY")
-    if not api_key:
-        return None
-    if genai is None:  # pragma: no cover
-        raise RuntimeError("google-genai is not installed")
-    return genai.Client(api_key=api_key)
+    rows = sb.table(portfolio_table).select("*").execute().data or []
+    if resolved_id is not None:
+        rows = [r for r in rows if _row_matches_portfolio(r, resolved_id)]
+    if not rows:
+        raise ValueError("Portfolio is empty.")
+
+    cash_usd, holding_rows = _extract_cash_from_rows(rows, portfolio_id=resolved_id)
+    if not holding_rows:
+        raise ValueError("No stock holdings found (only cash row?).")
+
+    need_refresh = [
+        _normalize_symbol(str(r.get("symbol", "")))
+        for r in holding_rows
+        if r.get("symbol") and get_symbol_snapshot(str(r["symbol"])) is None
+    ]
+    if need_refresh:
+        try:
+            refresh_market_snapshots(need_refresh, include_benchmarks=False)
+        except Exception:
+            pass
+
+    positions: List[Dict[str, Any]] = []
+    warnings: List[str] = []
+    for row in holding_rows:
+        try:
+            sym = _normalize_symbol(row["symbol"])
+            pos = _calc_position_metrics_cached(
+                sym,
+                _safe_float(row.get("shares"), 0.0),
+                _safe_float(row.get("cost_basis"), 0.0),
+            )
+            stored_sec = _portfolio_sector_from_row(row)
+            pos["sector"] = stored_sec or _yfinance_sector_label(sym)
+            positions.append(pos)
+        except Exception as e:
+            warnings.append(f"{row.get('symbol')}: data error — {str(e)}")
+
+    if not positions:
+        raise ValueError("No valid positions to screen ideas against.")
+
+    total_invested = sum(_safe_float(p.get("position_value"), 0.0) for p in positions)
+    total_value = max(total_invested + cash_usd, 1e-9)
+    for p in positions:
+        p["weight_pct"] = round(_safe_float(p.get("position_value")) / total_value * 100, 3)
+    sector_breakdown = _sector_breakdown(positions)
+    cash_pct = cash_usd / total_value * 100
+    cash_floor_usd = cfg.cash_floor_pct * total_value
+    policy_report = {
+        "combined_dip_level": 0,
+        "positions": positions,
+        "sector_breakdown": sector_breakdown,
+        "warnings": warnings,
+        "policy": {
+            "holdings_count": len(positions),
+            "max_new_buys": max(0, cfg.max_holdings - len(positions)),
+            "constraints": {
+                "cash_floor_pct": cfg.cash_floor_pct,
+                "max_holdings": cfg.max_holdings,
+            },
+            "totals": {
+                "total_value": round(total_value, 2),
+                "total_invested": round(total_invested, 2),
+                "cash_usd": round(cash_usd, 2),
+                "cash_pct": round(cash_pct, 2),
+                "cash_needed_usd": round(max(0.0, cash_floor_usd - cash_usd), 2),
+                "excess_cash_usd": round(max(0.0, cash_usd - cash_floor_usd), 2),
+                "deploy_budget_usd": round(max(0.0, cash_usd - cash_floor_usd), 2),
+            },
+        },
+    }
+    suggested_buys, suggest_error = _generate_suggested_buys(
+        gemini, policy_report, extra_exclude=extra_exclude or []
+    )
+    webhook = post_ideas_webhook(
+        portfolio_id=resolved_id,
+        source="ideas",
+        ideas=suggested_buys,
+    )
+    return {
+        "suggested_buys": suggested_buys,
+        "suggest_error": suggest_error,
+        "excluded": sorted(
+            {_normalize_symbol(str(s)) for s in (extra_exclude or []) if s}
+        ),
+        "webhook": webhook,
+    }
 
 
 def create_app() -> FastAPI:
@@ -2428,6 +1762,21 @@ def create_app() -> FastAPI:
             return run_portfolio_analysis(
                 portfolio_id=portfolio_id, force_live=force_live
             )
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        except RuntimeError as e:
+            raise HTTPException(status_code=500, detail=str(e)) from e
+
+    @app.post("/api/ideas")
+    async def more_ideas(
+        portfolio_id: Optional[str] = Query(None),
+        exclude: Optional[str] = Query(
+            None, description="Comma-separated tickers already shown this session"
+        ),
+    ):
+        extra = [p.strip() for p in (exclude or "").split(",") if p.strip()]
+        try:
+            return run_idea_search(portfolio_id=portfolio_id, extra_exclude=extra)
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
         except RuntimeError as e:

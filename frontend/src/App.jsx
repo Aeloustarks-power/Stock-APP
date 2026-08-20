@@ -1,92 +1,22 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { BarChart3, ShieldAlert, Plus, Trash2, RefreshCw, Lock } from 'lucide-react';
-import ReactMarkdown from 'react-markdown';
+import React, { useCallback, useEffect, useState } from 'react';
+import { ShieldAlert } from 'lucide-react';
+import LockScreen from './components/LockScreen.jsx';
+import HoldingsTable from './components/HoldingsTable.jsx';
+import AnalysisPane from './components/AnalysisPane.jsx';
+import TopBar from './components/TopBar.jsx';
 import {
-  PieChart,
-  Pie,
-  Cell,
-  ResponsiveContainer,
-  Tooltip,
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-} from 'recharts';
+  apiFetch,
+  formatApiErrorDetail,
+  friendlyNetworkError,
+  getSiteToken,
+  setSiteToken,
+} from './api.js';
+import { loadLastAnalysis, saveLastAnalysis } from './lastAnalysis.js';
 
-const API_BASE = import.meta.env.VITE_API_BASE ?? 'http://localhost:8000';
-const TOKEN_KEY = 'us-stock-site-token';
-
-function getSiteToken() {
-  try {
-    return sessionStorage.getItem(TOKEN_KEY) || '';
-  } catch {
-    return '';
-  }
-}
-
-function setSiteToken(token) {
-  try {
-    if (token) sessionStorage.setItem(TOKEN_KEY, token);
-    else sessionStorage.removeItem(TOKEN_KEY);
-  } catch {
-    // ignore private-mode storage failures
-  }
-}
-
-async function apiFetch(path, options = {}) {
-  const headers = { ...(options.headers || {}) };
-  const token = getSiteToken();
-  if (token) headers.Authorization = `Bearer ${token}`;
-  const response = await fetch(`${API_BASE}${path}`, { ...options, headers });
-  if (response.status === 401) {
-    setSiteToken('');
-    window.dispatchEvent(new Event('site-lock'));
-  }
-  return response;
-}
 const PROFILES = [
   { id: 'Eric', label: 'Eric' },
   { id: 'Vivien', label: 'Vivien' },
 ];
-
-const TABS = [
-  { id: 'overview', label: 'Overview' },
-  { id: 'actions', label: 'Actions' },
-  { id: 'ideas', label: 'Ideas' },
-  { id: 'ai', label: 'AI' },
-  { id: 'tools', label: 'Tools' },
-];
-
-const CHART_COLORS = ['#5D4037', '#8D6E63', '#A1887F', '#BCAAA4', '#6D4C41', '#3E2723', '#E8C547', '#827717'];
-
-function formatApiErrorDetail(detail) {
-  if (detail == null) return '';
-  if (typeof detail === 'string') return detail;
-  if (Array.isArray(detail)) {
-    return detail
-      .map((item) => {
-        if (item == null) return '';
-        if (typeof item === 'string') return item;
-        if (typeof item === 'object' && 'msg' in item) {
-          const loc = Array.isArray(item.loc) ? item.loc.filter((x) => x !== 'body').join('.') : '';
-          return loc ? `${loc}: ${item.msg}` : String(item.msg);
-        }
-        return JSON.stringify(item);
-      })
-      .filter(Boolean)
-      .join('; ');
-  }
-  if (typeof detail === 'object') {
-    if ('msg' in detail) return String(detail.msg);
-    try {
-      return JSON.stringify(detail);
-    } catch {
-      return String(detail);
-    }
-  }
-  return String(detail);
-}
 
 function emptyRow() {
   return { id: `${Date.now()}-${Math.random().toString(16).slice(2)}`, symbol: '', shares: '', cost_basis: '' };
@@ -118,8 +48,31 @@ function parseBulkPaste(text) {
   return rows;
 }
 
-function money(n) {
-  return `$${Number(n ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+function holdingsMixFromReport(report, totals) {
+  const positions = Array.isArray(report?.positions) ? report.positions : [];
+  const rows = positions
+    .map((p) => ({
+      symbol: String(p.symbol || '').toUpperCase(),
+      weight_pct: Number(p.weight_pct || 0),
+      pnl: Number(p.pnl || 0),
+      isCash: false,
+    }))
+    .filter((r) => r.symbol);
+  rows.push({
+    symbol: 'CASH',
+    weight_pct: Number(totals?.cash_pct ?? 0),
+    pnl: 0,
+    isCash: true,
+  });
+  return rows;
+}
+
+function dipFromReport(report) {
+  return {
+    combined: Number(report?.combined_dip_level || 0),
+    qqq: report?.qqq || {},
+    spy: report?.spy || {},
+  };
 }
 
 function App() {
@@ -128,6 +81,9 @@ function App() {
   const [passwordInput, setPasswordInput] = useState('');
   const [authError, setAuthError] = useState(null);
   const [authBusy, setAuthBusy] = useState(false);
+  const [authNonce, setAuthNonce] = useState(0);
+  const [wakingServer, setWakingServer] = useState(false);
+  const [editingHoldings, setEditingHoldings] = useState(false);
   const [selectedPortfolio, setSelectedPortfolio] = useState(PROFILES[0].id);
   const [activeTab, setActiveTab] = useState('overview');
   const [rows, setRows] = useState([emptyRow()]);
@@ -152,6 +108,15 @@ function App() {
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState(null);
   const [refreshingSnapshots, setRefreshingSnapshots] = useState(false);
+  const [ideasLoading, setIdeasLoading] = useState(false);
+  const [seenIdeaSymbols, setSeenIdeaSymbols] = useState([]);
+  const [analysisSavedAt, setAnalysisSavedAt] = useState(null);
+  const [aiNote, setAiNote] = useState(null);
+  const [holdingsMix, setHoldingsMix] = useState([]);
+  const [dip, setDip] = useState(null);
+  const [cashFloorPct, setCashFloorPct] = useState(0.15);
+  const [whyNoActions, setWhyNoActions] = useState([]);
+  const [ideasWebhook, setIdeasWebhook] = useState(null);
 
   const fetchPortfolio = useCallback(async () => {
     setPortfolioLoading(true);
@@ -178,7 +143,7 @@ function App() {
           : [emptyRow()]
       );
     } catch (err) {
-      setPortfolioError(err.message);
+      setPortfolioError(friendlyNetworkError(err));
     } finally {
       setPortfolioLoading(false);
     }
@@ -186,15 +151,25 @@ function App() {
 
   useEffect(() => {
     const lock = () => setUnlocked(false);
+    const slow = () => setWakingServer(true);
+    const slowEnd = () => setWakingServer(false);
     window.addEventListener('site-lock', lock);
-    return () => window.removeEventListener('site-lock', lock);
+    window.addEventListener('api-slow', slow);
+    window.addEventListener('api-slow-end', slowEnd);
+    return () => {
+      window.removeEventListener('site-lock', lock);
+      window.removeEventListener('api-slow', slow);
+      window.removeEventListener('api-slow-end', slowEnd);
+    };
   }, []);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
+      setAuthChecking(true);
+      setAuthError(null);
       try {
-        const statusRes = await fetch(`${API_BASE}/api/auth/status`);
+        const statusRes = await apiFetch('/api/auth/status');
         const statusData = await statusRes.json().catch(() => ({ required: true }));
         if (!statusData.required) {
           if (!cancelled) setUnlocked(true);
@@ -208,8 +183,11 @@ function App() {
         const probe = await apiFetch('/api/snapshots');
         if (!cancelled) setUnlocked(probe.ok);
         if (!probe.ok) setSiteToken('');
-      } catch {
-        if (!cancelled) setUnlocked(false);
+      } catch (err) {
+        if (!cancelled) {
+          setUnlocked(false);
+          setAuthError(friendlyNetworkError(err));
+        }
       } finally {
         if (!cancelled) setAuthChecking(false);
       }
@@ -217,12 +195,31 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [authNonce]);
 
   useEffect(() => {
     if (!unlocked) return;
+    setEditingHoldings(false);
     fetchPortfolio();
   }, [fetchPortfolio, unlocked]);
+
+  useEffect(() => {
+    const saved = loadLastAnalysis(selectedPortfolio);
+    setAiAnalysis(saved?.aiAnalysis ?? null);
+    setAiTotals(saved?.totals ?? null);
+    setAiWarnings(Array.isArray(saved?.warnings) ? saved.warnings : []);
+    setRuleActions(Array.isArray(saved?.ruleActions) ? saved.ruleActions : []);
+    setSuggestedBuys(Array.isArray(saved?.suggestedBuys) ? saved.suggestedBuys : []);
+    setSectorBreakdown(Array.isArray(saved?.sectorBreakdown) ? saved.sectorBreakdown : []);
+    setSnapshotMeta(saved?.snapshotMeta ?? null);
+    setSeenIdeaSymbols(Array.isArray(saved?.seenIdeaSymbols) ? saved.seenIdeaSymbols : []);
+    setAnalysisSavedAt(saved?.savedAt ?? null);
+    setAiNote(saved?.aiNote && typeof saved.aiNote === 'object' ? saved.aiNote : null);
+    setHoldingsMix(Array.isArray(saved?.holdingsMix) ? saved.holdingsMix : []);
+    setDip(saved?.dip && typeof saved.dip === 'object' ? saved.dip : null);
+    setCashFloorPct(Number(saved?.cashFloorPct ?? 0.15) || 0.15);
+    setWhyNoActions(Array.isArray(saved?.whyNoActions) ? saved.whyNoActions : []);
+  }, [selectedPortfolio]);
 
   const updateRow = (id, field, value) => {
     setRows((prev) =>
@@ -245,6 +242,10 @@ function App() {
   };
 
   const applyBulkPaste = () => {
+    if (!editingHoldings) {
+      setError('Tap Edit before pasting holdings.');
+      return;
+    }
     const parsed = parseBulkPaste(bulkText);
     if (!parsed.length) {
       setError('Bulk paste needs lines like AAPL,10,180.5');
@@ -318,8 +319,9 @@ function App() {
             }))
           : [emptyRow()]
       );
+      setEditingHoldings(false);
     } catch (err) {
-      setError(err.message);
+      setError(friendlyNetworkError(err));
     } finally {
       setPortfolioSaving(false);
     }
@@ -344,7 +346,7 @@ function App() {
       }
       setStockData(await response.json());
     } catch (err) {
-      setError(err.message);
+      setError(friendlyNetworkError(err));
     } finally {
       setQuoteLoading(false);
     }
@@ -353,12 +355,6 @@ function App() {
   const handleAnalyzePortfolio = async () => {
     setAiLoading(true);
     setAiError(null);
-    setAiAnalysis(null);
-    setAiWarnings([]);
-    setAiTotals(null);
-    setRuleActions([]);
-    setSuggestedBuys([]);
-    setSectorBreakdown([]);
     setActiveTab('overview');
     try {
       const response = await apiFetch(
@@ -371,36 +367,122 @@ function App() {
       }
       const data = await response.json();
       const report = data?.policy_report || {};
-      setAiAnalysis(data?.ai_summary ?? 'No response from AI');
-      setAiWarnings(
-        Array.isArray(data?.warnings)
-          ? data.warnings
-          : Array.isArray(report?.warnings)
-            ? report.warnings
-            : []
-      );
-      setAiTotals(data?.totals ?? report?.policy?.totals ?? null);
-      setRuleActions(
-        Array.isArray(data?.rule_actions)
-          ? data.rule_actions
-          : Array.isArray(report?.policy?.recommended_actions)
-            ? report.policy.recommended_actions
-            : []
-      );
-      setSuggestedBuys(Array.isArray(data?.suggested_buys) ? data.suggested_buys : []);
-      setSectorBreakdown(
-        Array.isArray(data?.sector_breakdown)
-          ? data.sector_breakdown
-          : Array.isArray(report?.sector_breakdown)
-            ? report.sector_breakdown
-            : []
-      );
-      setSnapshotMeta(data?.snapshot_meta ?? report?.snapshot_meta ?? null);
+      const nextAnalysis = data?.ai_summary || null;
+      const nextWarnings = Array.isArray(data?.warnings)
+        ? data.warnings
+        : Array.isArray(report?.warnings)
+          ? report.warnings
+          : [];
+      const nextTotals = data?.totals ?? report?.policy?.totals ?? null;
+      const nextActions = Array.isArray(data?.rule_actions)
+        ? data.rule_actions
+        : Array.isArray(report?.policy?.recommended_actions)
+          ? report.policy.recommended_actions
+          : [];
+      const nextBuys = Array.isArray(data?.suggested_buys) ? data.suggested_buys : [];
+      const nextSectors = Array.isArray(data?.sector_breakdown)
+        ? data.sector_breakdown
+        : Array.isArray(report?.sector_breakdown)
+          ? report.sector_breakdown
+          : [];
+      const nextSnap = data?.snapshot_meta ?? report?.snapshot_meta ?? null;
+      const nextSeen = new Set(seenIdeaSymbols);
+      for (const s of nextBuys) {
+        if (s?.symbol) nextSeen.add(String(s.symbol).toUpperCase());
+      }
+      const seenList = Array.from(nextSeen);
+      const nextNote =
+        data?.ai_note && typeof data.ai_note === 'object' && (data.ai_note.crowding || data.ai_note.catalyst || data.ai_note.risk)
+          ? data.ai_note
+          : null;
+      const nextMix = holdingsMixFromReport(report, nextTotals);
+      const nextDip = dipFromReport(report);
+      const nextFloor = Number(report?.policy?.constraints?.cash_floor_pct ?? 0.15) || 0.15;
+      const nextWhy = Array.isArray(report?.why_no_other_actions) ? report.why_no_other_actions : [];
+      setAiAnalysis(nextAnalysis);
+      setAiNote(nextNote);
+      setAiWarnings(nextWarnings);
+      setAiTotals(nextTotals);
+      setRuleActions(nextActions);
+      setSuggestedBuys(nextBuys);
+      setSeenIdeaSymbols(seenList);
+      setSectorBreakdown(nextSectors);
+      setSnapshotMeta(nextSnap);
+      setHoldingsMix(nextMix);
+      setDip(nextDip);
+      setCashFloorPct(nextFloor);
+      setWhyNoActions(nextWhy);
       setAiError(data?.ai_error || data?.suggest_error || null);
+      setIdeasWebhook(data?.webhook || null);
+      const stored = saveLastAnalysis(selectedPortfolio, {
+        aiAnalysis: nextAnalysis,
+        aiNote: nextNote,
+        warnings: nextWarnings,
+        totals: nextTotals,
+        ruleActions: nextActions,
+        suggestedBuys: nextBuys,
+        sectorBreakdown: nextSectors,
+        snapshotMeta: nextSnap,
+        seenIdeaSymbols: seenList,
+        holdingsMix: nextMix,
+        dip: nextDip,
+        cashFloorPct: nextFloor,
+        whyNoActions: nextWhy,
+      });
+      setAnalysisSavedAt(stored.savedAt);
     } catch (err) {
-      setAiError(err.message);
+      setAiError(friendlyNetworkError(err));
     } finally {
       setAiLoading(false);
+    }
+  };
+
+  const handleMoreIdeas = async () => {
+    setIdeasLoading(true);
+    setAiError(null);
+    setActiveTab('ideas');
+    try {
+      const exclude = seenIdeaSymbols
+        .concat((suggestedBuys || []).map((s) => s.symbol))
+        .filter(Boolean)
+        .join(',');
+      const qs = new URLSearchParams({
+        portfolio_id: selectedPortfolio,
+      });
+      if (exclude) qs.set('exclude', exclude);
+      const response = await apiFetch(`/api/ideas?${qs.toString()}`, { method: 'POST' });
+      if (!response.ok) {
+        const errPayload = await response.json().catch(() => ({}));
+        throw new Error(formatApiErrorDetail(errPayload?.detail) || 'Failed to fetch ideas');
+      }
+      const data = await response.json();
+      const next = Array.isArray(data?.suggested_buys) ? data.suggested_buys : [];
+      if (!next.length) {
+        throw new Error(
+          data?.suggest_error ||
+            'No new names in the screen. Try again later or run Analyze first.'
+        );
+      }
+      setSuggestedBuys(next);
+      const seenList = (() => {
+        const merged = new Set(seenIdeaSymbols);
+        for (const s of next) {
+          if (s?.symbol) merged.add(String(s.symbol).toUpperCase());
+        }
+        return Array.from(merged);
+      })();
+      setSeenIdeaSymbols(seenList);
+      if (data?.suggest_error) setAiError(data.suggest_error);
+      setIdeasWebhook(data?.webhook || null);
+      const stored = saveLastAnalysis(selectedPortfolio, {
+        suggestedBuys: next,
+        seenIdeaSymbols: seenList,
+      });
+      setAnalysisSavedAt(stored.savedAt);
+    } catch (err) {
+      setAiError(friendlyNetworkError(err));
+    } finally {
+      setIdeasLoading(false);
     }
   };
 
@@ -422,55 +504,10 @@ function App() {
         symbol_count: data.symbol_count,
       });
     } catch (err) {
-      setError(err.message);
+      setError(friendlyNetworkError(err));
     } finally {
       setRefreshingSnapshots(false);
     }
-  };
-
-  const sectorChartData = useMemo(
-    () =>
-      (sectorBreakdown || []).map((s) => ({
-        name: s.sector || 'Unknown',
-        value: Number(s.weight_pct || 0),
-      })),
-    [sectorBreakdown]
-  );
-
-  const actionChartData = useMemo(
-    () =>
-      (ruleActions || []).map((a) => ({
-        name: `${a.symbol}`,
-        type: a.type,
-        usd: Number(a.trade_usd || 0),
-      })),
-    [ruleActions]
-  );
-
-  const displaySymbol = stockData?.shortName ?? stockData?.symbol ?? '';
-  const displayPrice = stockData?.price ?? stockData?.regularMarketPrice;
-  const inferredAdvice =
-    stockData?.advice ??
-    (() => {
-      const pct = stockData?.regularMarketChangePercent;
-      if (typeof pct !== 'number') return 'N/A';
-      const pctStr = `${pct.toFixed(2)}%`;
-      return pct >= 0 ? `GAIN (${pctStr})` : `LOSS (${pctStr})`;
-    })();
-  const adviceOk =
-    typeof stockData?.advice === 'string'
-      ? stockData.advice.includes('BUY')
-      : typeof stockData?.regularMarketChangePercent === 'number' &&
-        stockData.regularMarketChangePercent >= 0;
-
-  const markdownComponents = {
-    h1: ({ children }) => <h2>{children}</h2>,
-    h2: ({ children }) => <h3>{children}</h3>,
-    h3: ({ children }) => <h4>{children}</h4>,
-    p: ({ children }) => <p>{children}</p>,
-    li: ({ children }) => <li>{children}</li>,
-    ul: ({ children }) => <ul>{children}</ul>,
-    ol: ({ children }) => <ol>{children}</ol>,
   };
 
   const handleUnlock = async (event) => {
@@ -478,7 +515,7 @@ function App() {
     setAuthBusy(true);
     setAuthError(null);
     try {
-      const response = await fetch(`${API_BASE}/api/auth/login`, {
+      const response = await apiFetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ password: passwordInput }),
@@ -500,7 +537,7 @@ function App() {
       setUnlocked(true);
       setPasswordInput('');
     } catch (err) {
-      setAuthError(err.message || 'Wrong password');
+      setAuthError(friendlyNetworkError(err) || 'Wrong password');
     } finally {
       setAuthBusy(false);
     }
@@ -512,440 +549,104 @@ function App() {
     setPasswordInput('');
     setAuthError(null);
     setAuthChecking(false);
+    setEditingHoldings(false);
   };
 
   const banner = error || portfolioError || aiError;
 
   if (authChecking || !unlocked) {
     return (
-      <div className="lock-screen">
-        <form className="lock-card" onSubmit={handleUnlock}>
-          <div className="lock-brand">
-            <BarChart3 size={26} color="#1c1917" />
-            <h1>US Stock Sentinel</h1>
-          </div>
-          {authChecking ? (
-            <p className="empty">Checking access…</p>
-          ) : (
-            <>
-              <p className="lock-copy">Enter the site password to view and edit portfolios.</p>
-              <label htmlFor="site-password">Password</label>
-              <input
-                id="site-password"
-                className="lock-input"
-                type="password"
-                autoComplete="current-password"
-                value={passwordInput}
-                onChange={(e) => setPasswordInput(e.target.value)}
-                autoFocus
-              />
-              {authError && (
-                <div className="banner" role="alert">
-                  <ShieldAlert size={16} />
-                  <span>{authError}</span>
-                </div>
-              )}
-              <button type="submit" className="btn btn-primary" disabled={authBusy || !passwordInput}>
-                <Lock size={14} />
-                {authBusy ? 'Checking…' : 'Unlock'}
-              </button>
-            </>
-          )}
-        </form>
-      </div>
+      <LockScreen
+        checking={authChecking}
+        password={passwordInput}
+        error={authError}
+        busy={authBusy}
+        onPasswordChange={setPasswordInput}
+        onSubmit={handleUnlock}
+        onRetry={() => setAuthNonce((n) => n + 1)}
+      />
     );
   }
 
   return (
     <div className="app-shell">
-      <header className="topbar">
-        <div className="brand">
-          <BarChart3 size={26} color="#1c1917" />
-          <h1>US Stock Sentinel</h1>
+      <TopBar
+        profiles={PROFILES}
+        selectedPortfolio={selectedPortfolio}
+        onPortfolioChange={setSelectedPortfolio}
+        cashUsd={cashUsd}
+        onCashChange={setCashUsd}
+        snapshotMeta={snapshotMeta}
+        onRefresh={handleRefreshSnapshots}
+        refreshing={refreshingSnapshots}
+        editing={editingHoldings}
+        onToggleEdit={() => setEditingHoldings((v) => !v)}
+        onAddRow={addRow}
+        onSaveAll={handleSaveAll}
+        saving={portfolioSaving}
+        loading={portfolioLoading}
+        onAnalyze={handleAnalyzePortfolio}
+        analyzing={aiLoading}
+        onLock={handleLock}
+      />
+
+      {wakingServer && (
+        <div className="banner banner-info" role="status">
+          Waking the API… Render sleeps when idle. This can take 30–60 seconds.
         </div>
-
-        <div className="topbar-controls">
-          <div className="field">
-            <label htmlFor="portfolio">Portfolio</label>
-            <select
-              id="portfolio"
-              value={selectedPortfolio}
-              onChange={(e) => setSelectedPortfolio(e.target.value)}
-            >
-              {PROFILES.map((profile) => (
-                <option key={profile.id} value={profile.id}>
-                  {profile.label}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div className="field">
-            <label htmlFor="cash">Cash</label>
-            <input
-              id="cash"
-              className="mono"
-              type="number"
-              min="0"
-              step="any"
-              value={cashUsd}
-              onChange={(e) => setCashUsd(e.target.value)}
-              style={{ width: 110 }}
-            />
-          </div>
-
-          {snapshotMeta?.updated_at && (
-            <span className="meta" title="Market snapshot time">
-              {snapshotMeta.updated_at}
-              {snapshotMeta.symbol_count != null ? ` · ${snapshotMeta.symbol_count}` : ''}
-            </span>
-          )}
-
-          <button
-            type="button"
-            className="btn btn-ghost"
-            onClick={handleRefreshSnapshots}
-            disabled={refreshingSnapshots}
-          >
-            <RefreshCw size={14} />
-            {refreshingSnapshots ? '…' : 'Refresh'}
-          </button>
-
-          <button
-            type="button"
-            className="btn"
-            onClick={addRow}
-          >
-            <Plus size={14} /> Row
-          </button>
-
-          <button
-            type="button"
-            className="btn btn-primary"
-            onClick={handleSaveAll}
-            disabled={portfolioSaving || portfolioLoading}
-          >
-            {portfolioSaving ? 'Saving…' : 'Save all'}
-          </button>
-
-          <button
-            type="button"
-            className="btn btn-primary"
-            onClick={handleAnalyzePortfolio}
-            disabled={aiLoading || portfolioLoading}
-          >
-            {aiLoading ? 'Analyzing…' : 'Analyze'}
-          </button>
-
-          <button
-            type="button"
-            className="btn btn-ghost"
-            onClick={handleLock}
-            title="Lock site"
-          >
-            <Lock size={14} />
-            Lock
-          </button>
-        </div>
-      </header>
+      )}
 
       {banner && (
         <div className="banner" role="alert">
           <ShieldAlert size={16} />
           <span>{banner}</span>
+          {portfolioError ? (
+            <button type="button" className="btn" onClick={fetchPortfolio}>
+              Retry
+            </button>
+          ) : null}
         </div>
       )}
 
       <div className="workspace">
-        <section className="pane" aria-label="Holdings">
-          <div className="pane-header">
-            <h2>Holdings</h2>
-            <span className="meta">{portfolioLoading ? 'Loading…' : `${rows.filter((r) => r.symbol.trim()).length} names`}</span>
-          </div>
-          <div className="table-wrap">
-            {portfolioLoading ? (
-              <p className="empty" style={{ padding: 12 }}>Loading…</p>
-            ) : (
-              <table className="holdings-table">
-                <thead>
-                  <tr>
-                    <th className="col-symbol">Symbol</th>
-                    <th className="col-shares">Shares</th>
-                    <th className="col-cost">Cost / share</th>
-                    <th className="col-actions" />
-                  </tr>
-                </thead>
-                <tbody>
-                  {rows.map((row) => (
-                    <tr key={row.id}>
-                      <td className="col-symbol">
-                        <input
-                          className="mono"
-                          value={row.symbol}
-                          onChange={(e) => updateRow(row.id, 'symbol', e.target.value)}
-                          placeholder="AAPL"
-                        />
-                      </td>
-                      <td className="col-shares">
-                        <input
-                          className="mono"
-                          type="number"
-                          min="0"
-                          step="any"
-                          value={row.shares}
-                          onChange={(e) => updateRow(row.id, 'shares', e.target.value)}
-                        />
-                      </td>
-                      <td className="col-cost">
-                        <input
-                          className="mono"
-                          type="number"
-                          min="0"
-                          step="any"
-                          value={row.cost_basis}
-                          onChange={(e) => updateRow(row.id, 'cost_basis', e.target.value)}
-                        />
-                      </td>
-                      <td className="col-actions">
-                        <button
-                          type="button"
-                          className="btn btn-danger"
-                          onClick={() => removeRow(row.id)}
-                          aria-label="Remove row"
-                        >
-                          <Trash2 size={14} />
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </div>
-        </section>
+        <HoldingsTable
+          rows={rows}
+          loading={portfolioLoading}
+          editing={editingHoldings}
+          loadError={null}
+          onUpdateRow={updateRow}
+          onRemoveRow={removeRow}
+          onRetry={fetchPortfolio}
+        />
 
-        <section className="pane" aria-label="Analysis">
-          <div className="pane-header">
-            <div className="tabs" role="tablist">
-              {TABS.map((tab) => (
-                <button
-                  key={tab.id}
-                  type="button"
-                  role="tab"
-                  aria-selected={activeTab === tab.id}
-                  className={`tab${activeTab === tab.id ? ' active' : ''}`}
-                  onClick={() => setActiveTab(tab.id)}
-                >
-                  {tab.label}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div className="tab-body" role="tabpanel">
-            {activeTab === 'overview' && (
-              <>
-                {!aiTotals && !aiLoading && (
-                  <p className="empty">Run Analyze to see totals and sector mix.</p>
-                )}
-                {aiLoading && <p className="empty">Crunching numbers with Gemini…</p>}
-                {aiTotals && (
-                  <>
-                    <div className="stats">
-                      <div className="stat">
-                        <span className="label">Market value</span>
-                        <span className="value">{money(aiTotals.total_value)}</span>
-                      </div>
-                      <div className="stat">
-                        <span className="label">Invested</span>
-                        <span className="value">{money(aiTotals.total_invested)}</span>
-                      </div>
-                      <div className="stat">
-                        <span className="label">Cash</span>
-                        <span className="value">
-                          {money(aiTotals.cash_usd)} ({Number(aiTotals.cash_pct ?? 0).toFixed(1)}%)
-                        </span>
-                      </div>
-                      <div className="stat">
-                        <span className="label">Unrealized P&amp;L</span>
-                        <span className="value">{money(aiTotals.total_pnl)}</span>
-                      </div>
-                      <div className="stat">
-                        <span className="label">Total cost</span>
-                        <span className="value">{money(aiTotals.total_cost)}</span>
-                      </div>
-                      <div className="stat">
-                        <span className="label">Deploy budget</span>
-                        <span className="value">{money(aiTotals.deploy_budget_usd)}</span>
-                      </div>
-                    </div>
-                    {aiWarnings.length > 0 && (
-                      <ul className="warn-list" style={{ color: 'var(--danger)', marginBottom: 12 }}>
-                        {aiWarnings.map((warning, idx) => (
-                          <li key={`${warning}-${idx}`}>{warning}</li>
-                        ))}
-                      </ul>
-                    )}
-                    {sectorChartData.length > 0 && (
-                      <>
-                        <h3 className="section-title">Sector mix</h3>
-                        <div className="chart-box">
-                          <ResponsiveContainer width="100%" height="100%">
-                            <PieChart>
-                              <Pie data={sectorChartData} dataKey="value" nameKey="name" outerRadius={72} label>
-                                {sectorChartData.map((_, i) => (
-                                  <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />
-                                ))}
-                              </Pie>
-                              <Tooltip formatter={(v) => `${Number(v).toFixed(1)}%`} />
-                            </PieChart>
-                          </ResponsiveContainer>
-                        </div>
-                      </>
-                    )}
-                  </>
-                )}
-              </>
-            )}
-
-            {activeTab === 'actions' && (
-              <>
-                {!aiLoading && ruleActions.length === 0 && (
-                  <p className="empty">No rule actions yet. Run Analyze.</p>
-                )}
-                {ruleActions.length > 0 && (
-                  <>
-                    <ul className="action-list">
-                      {ruleActions.map((a, idx) => (
-                        <li key={`${a.type}-${a.symbol}-${idx}`} className="action-item">
-                          <div className="head">
-                            <span>
-                              {a.symbol} · {a.type}
-                            </span>
-                            <span>
-                              {money(a.trade_usd)}
-                              {a.approx_shares != null ? ` · ~${a.approx_shares} sh` : ''}
-                            </span>
-                          </div>
-                          <div className="reason">{a.reason}</div>
-                        </li>
-                      ))}
-                    </ul>
-                    {actionChartData.length > 0 && (
-                      <div className="chart-box">
-                        <ResponsiveContainer width="100%" height="100%">
-                          <BarChart data={actionChartData}>
-                            <CartesianGrid strokeDasharray="3 3" stroke="#d6cbc0" />
-                            <XAxis dataKey="name" tick={{ fontSize: 11 }} />
-                            <YAxis tick={{ fontSize: 11 }} />
-                            <Tooltip />
-                            <Bar dataKey="usd" fill="#5D4037" />
-                          </BarChart>
-                        </ResponsiveContainer>
-                      </div>
-                    )}
-                  </>
-                )}
-              </>
-            )}
-
-            {activeTab === 'ideas' && (
-              <>
-                {!aiLoading && suggestedBuys.length === 0 && (
-                  <p className="empty">Run Analyze for portfolio-aware suggested buys (screen → AI rank).</p>
-                )}
-                <div className="idea-list">
-                  {suggestedBuys.slice(0, 3).map((s) => (
-                    <article key={s.symbol} className="idea-card">
-                      <div className="head">
-                        <span>{s.symbol}</span>
-                        <span>
-                          {(Number(s.confidence || 0) * 100).toFixed(0)}%
-                          {s.metrics?.price != null ? ` · $${s.metrics.price}` : ''}
-                          {s.metrics?.rsi != null ? ` · RSI ${s.metrics.rsi}` : ''}
-                        </span>
-                      </div>
-                      <p><strong>Thesis:</strong> {s.thesis || '—'}</p>
-                      {s.thesis_zh ? <p className="zh">{s.thesis_zh}</p> : null}
-                      <p><strong>Fit:</strong> {s.fit || '—'}</p>
-                      {s.fit_zh ? <p className="zh">{s.fit_zh}</p> : null}
-                      <p><strong>Catalyst:</strong> {s.catalyst || '—'}</p>
-                      {s.catalyst_zh ? <p className="zh">{s.catalyst_zh}</p> : null}
-                      <p><strong>Risk:</strong> {s.risk || '—'}</p>
-                      {s.risk_zh ? <p className="zh">{s.risk_zh}</p> : null}
-                    </article>
-                  ))}
-                </div>
-              </>
-            )}
-
-            {activeTab === 'ai' && (
-              <>
-                {aiLoading && <p className="empty">Generating summary…</p>}
-                {!aiLoading && !aiAnalysis && (
-                  <p className="empty">AI narrative appears here after Analyze.</p>
-                )}
-                {!aiLoading && aiAnalysis && (
-                  <div className="ai-md">
-                    <ReactMarkdown components={markdownComponents}>{aiAnalysis}</ReactMarkdown>
-                  </div>
-                )}
-              </>
-            )}
-
-            {activeTab === 'tools' && (
-              <div className="tools-stack">
-                <div>
-                  <h3 className="section-title">Quick quote</h3>
-                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                    <input
-                      className="input mono"
-                      value={peekSymbol}
-                      onChange={(e) => setPeekSymbol(e.target.value.toUpperCase())}
-                      placeholder="Ticker"
-                      style={{ width: 140 }}
-                    />
-                    <button type="button" className="btn btn-primary" onClick={() => fetchStockData()}>
-                      {quoteLoading ? '…' : 'Peek'}
-                    </button>
-                  </div>
-                  {stockData && (
-                    <div className="quote-grid">
-                      <div>
-                        <div style={{ fontFamily: 'var(--font-brand)', fontWeight: 700 }}>{displaySymbol}</div>
-                        <div className="quote-price">{displayPrice != null ? `$${displayPrice}` : '—'}</div>
-                        <div className={adviceOk ? 'advice-ok' : 'advice-warn'}>
-                          <strong>ADVICE:</strong> {inferredAdvice}
-                        </div>
-                      </div>
-                      <div className="mono" style={{ fontSize: 13 }}>
-                        <div>MA20: ${stockData.ma20 ?? '—'}</div>
-                        <div>RSI: {stockData.rsi ?? '—'}</div>
-                      </div>
-                    </div>
-                  )}
-                </div>
-
-                <div>
-                  <h3 className="section-title">Bulk paste</h3>
-                  <p className="empty" style={{ marginBottom: 8 }}>
-                    Lines like <span className="mono">AAPL,10,180.5</span>
-                  </p>
-                  <textarea
-                    className="textarea"
-                    value={bulkText}
-                    onChange={(e) => setBulkText(e.target.value)}
-                    placeholder={'AAPL,10,180.5\nMSFT,5,400'}
-                    rows={4}
-                  />
-                  <button type="button" className="btn" style={{ marginTop: 8 }} onClick={applyBulkPaste}>
-                    Apply paste
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
-        </section>
+        <AnalysisPane
+          activeTab={activeTab}
+          onTabChange={setActiveTab}
+          loading={aiLoading}
+          totals={aiTotals}
+          warnings={aiWarnings}
+          sectorBreakdown={sectorBreakdown}
+          ruleActions={ruleActions}
+          suggestedBuys={suggestedBuys}
+          aiNote={aiNote}
+          holdingsMix={holdingsMix}
+          dip={dip}
+          cashFloorPct={cashFloorPct}
+          whyNoActions={whyNoActions}
+          peekSymbol={peekSymbol}
+          onPeekSymbolChange={setPeekSymbol}
+          onPeek={() => fetchStockData()}
+          quoteLoading={quoteLoading}
+          stockData={stockData}
+          bulkText={bulkText}
+          onBulkTextChange={setBulkText}
+          onApplyBulkPaste={applyBulkPaste}
+          editing={editingHoldings}
+          onMoreIdeas={handleMoreIdeas}
+          moreLoading={ideasLoading}
+          webhook={ideasWebhook}
+          savedAt={analysisSavedAt}
+        />
       </div>
     </div>
   );
