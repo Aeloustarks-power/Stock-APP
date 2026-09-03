@@ -734,6 +734,15 @@ button {
     min-height: 44px;
   }
 
+  /* 16px stops Chrome/Safari zooming the page when the ticker box is focused. */
+  .field input,
+  .field input.mono,
+  .lock-input,
+  .holdings-table input:not(:read-only),
+  .ticker-input {
+    font-size: 16px;
+  }
+
   .lock-toggle {
     width: 44px;
     height: 44px;

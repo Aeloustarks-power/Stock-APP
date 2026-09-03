@@ -225,11 +225,18 @@ function App() {
     setRows((prev) =>
       prev.map((row) => {
         if (row.id !== id) return row;
-        const next = { ...row, [field]: value };
-        if (field === 'symbol') next.symbol = String(value).toUpperCase();
-        return next;
+        return { ...row, [field]: value };
       })
     );
+  };
+
+  const toggleEdit = () => {
+    if (editingHoldings) {
+      setRows((prev) =>
+        prev.map((row) => ({ ...row, symbol: String(row.symbol).trim().toUpperCase() }))
+      );
+    }
+    setEditingHoldings((on) => !on);
   };
 
   const addRow = () => setRows((prev) => [...prev, emptyRow()]);
@@ -328,8 +335,9 @@ function App() {
   };
 
   const fetchStockData = async (overrideSymbol) => {
-    const resolvedSymbol = (overrideSymbol ?? peekSymbol).trim();
+    const resolvedSymbol = (overrideSymbol ?? peekSymbol).trim().toUpperCase();
     if (!resolvedSymbol) return;
+    if (!overrideSymbol) setPeekSymbol(resolvedSymbol);
     setQuoteLoading(true);
     setError(null);
     try {
@@ -580,7 +588,7 @@ function App() {
         onRefresh={handleRefreshSnapshots}
         refreshing={refreshingSnapshots}
         editing={editingHoldings}
-        onToggleEdit={() => setEditingHoldings((v) => !v)}
+        onToggleEdit={toggleEdit}
         onAddRow={addRow}
         onSaveAll={handleSaveAll}
         saving={portfolioSaving}
