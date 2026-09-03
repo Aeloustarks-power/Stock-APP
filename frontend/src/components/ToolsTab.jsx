@@ -33,9 +33,19 @@ export default function ToolsTab({
         <h3 className="section-title">Quick quote</h3>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <input
-            className="input mono"
+            className="input mono ticker-input"
             value={peekSymbol}
-            onChange={(e) => onPeekSymbolChange(e.target.value.toUpperCase())}
+            autoCapitalize="characters"
+            autoCorrect="off"
+            autoComplete="off"
+            spellCheck={false}
+            lang="en"
+            enterKeyHint="search"
+            onChange={(e) => onPeekSymbolChange(e.target.value)}
+            onBlur={(e) => {
+              const next = e.currentTarget.value.trim().toUpperCase();
+              if (next !== peekSymbol) onPeekSymbolChange(next);
+            }}
             placeholder="Ticker"
             style={{ width: 140 }}
           />

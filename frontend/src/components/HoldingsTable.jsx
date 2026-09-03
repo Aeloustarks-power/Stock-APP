@@ -60,10 +60,20 @@ export default function HoldingsTable({
                 <tr key={row.id}>
                   <td className="col-symbol">
                     <input
-                      className="mono"
+                      className="mono ticker-input"
                       value={row.symbol}
                       readOnly={!editing}
+                      autoCapitalize="characters"
+                      autoCorrect="off"
+                      autoComplete="off"
+                      spellCheck={false}
+                      lang="en"
+                      enterKeyHint={editing ? 'next' : undefined}
                       onChange={(e) => onUpdateRow(row.id, 'symbol', e.target.value)}
+                      onBlur={(e) => {
+                        const next = e.currentTarget.value.trim().toUpperCase();
+                        if (next !== row.symbol) onUpdateRow(row.id, 'symbol', next);
+                      }}
                       placeholder="AAPL"
                     />
                   </td>
