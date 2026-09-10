@@ -9,6 +9,16 @@
 # Set VITE_API_BASE in Netlify UI to your Render API URL, e.g.
 # https://us-stock-api.onrender.com
 
+[[headers]]
+  for = "/sw.js"
+  [headers.values]
+    Cache-Control = "no-cache"
+
+[[headers]]
+  for = "/manifest.webmanifest"
+  [headers.values]
+    Cache-Control = "no-cache"
+
 [[redirects]]
   from = "/*"
   to = "/index.html"
