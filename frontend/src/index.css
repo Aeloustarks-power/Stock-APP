@@ -397,12 +397,20 @@ button {
 }
 
 .holdings-table .col-symbol {
-  width: 28%;
+  width: 24%;
 }
 
 .holdings-table .col-shares,
-.holdings-table .col-cost {
-  width: 28%;
+.holdings-table .col-cost,
+.holdings-table .col-price {
+  width: 22%;
+}
+
+.holdings-table .col-price .last-price {
+  display: block;
+  padding: 6px 8px;
+  min-height: 32px;
+  line-height: 20px;
 }
 
 .holdings-table .col-actions {

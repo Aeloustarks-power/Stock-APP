@@ -159,6 +159,25 @@ def get_symbol_snapshot(
     return metrics if isinstance(metrics, dict) else None
 
 
+def snapshot_price_map(store: Optional[Dict[str, Any]] = None) -> Dict[str, float]:
+    """Last known Yahoo prices from snapshots.json (no TTL). Empty after a fresh Render boot."""
+    data = store if isinstance(store, dict) else _load_snapshot_store()
+    symbols = data.get("symbols") or {}
+    quotes: Dict[str, float] = {}
+    if not isinstance(symbols, dict):
+        return quotes
+    for raw_sym, entry in symbols.items():
+        if not isinstance(entry, dict):
+            continue
+        metrics = entry.get("metrics")
+        blob = metrics if isinstance(metrics, dict) else entry
+        px = _safe_float(blob.get("current_price"), 0.0)
+        sym = _normalize_symbol(str(raw_sym))
+        if sym and not _is_cash_symbol(sym) and px > 0:
+            quotes[sym] = round(px, 2)
+    return quotes
+
+
 def snapshot_store_meta() -> Dict[str, Any]:
     store = _load_snapshot_store()
     symbols = store.get("symbols") or {}
@@ -166,6 +185,7 @@ def snapshot_store_meta() -> Dict[str, Any]:
         "updated_at": store.get("updated_at"),
         "symbol_count": len(symbols) if isinstance(symbols, dict) else 0,
         "ttl_seconds": _snapshot_ttl_seconds(),
+        "quotes": snapshot_price_map(store),
     }
 
 
@@ -219,6 +239,7 @@ def refresh_market_snapshots(
         "requested_count": len(targets),
         "errors": errors[:20],
         "symbol_count": len(sym_map),
+        "quotes": snapshot_price_map(store),
     }
 
 
