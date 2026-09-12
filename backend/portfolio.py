@@ -183,11 +183,16 @@ if BaseModel is not object and Field is not None and field_validator is not None
     class PortfolioResponse(BaseModel):
         items: List[Dict[str, Any]]
         cash_usd: float = 0.0
+
+    class TickerNamePayload(BaseModel):
+        symbol: str
+        name_zh: str = ""
 else:  # pragma: no cover
     PortfolioPayload = None  # type: ignore[misc, assignment]
     PortfolioHoldingItem = None  # type: ignore[misc, assignment]
     PortfolioReplacePayload = None  # type: ignore[misc, assignment]
     PortfolioResponse = None  # type: ignore[misc, assignment]
+    TickerNamePayload = None  # type: ignore[misc, assignment]
 
 
 __all__ = [
@@ -204,4 +209,5 @@ __all__ = [
     "PortfolioPayload",
     "PortfolioReplacePayload",
     "PortfolioResponse",
+    "TickerNamePayload",
 ]

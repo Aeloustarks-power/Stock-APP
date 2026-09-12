@@ -1,5 +1,7 @@
 import React from 'react';
 import { money } from '../format.js';
+import { pick, t } from '../i18n.js';
+import { displayName } from '../tickerNames.js';
 
 const TYPE_COPY = {
   TRIM: {
@@ -56,16 +58,18 @@ function humanWhy(line) {
   const raw = String(line || '').trim();
   const hit = WHY_COPY.find((row) => raw.includes(row.match));
   if (hit) return hit;
-  return { en: raw, zh: '' };
+  return { en: raw, zh: raw };
 }
 
-function explainAction(a) {
+function explainAction(a, lang, chineseNames) {
   const usd = money(a.trade_usd);
   const target =
     a.target_weight_pct != null && Number.isFinite(Number(a.target_weight_pct))
       ? Number(a.target_weight_pct)
       : null;
-  const sym = a.symbol || 'this name';
+  const ticker = a.symbol || (lang === 'zh' ? '这只股票' : 'this name');
+  const name = displayName(a.symbol, lang, chineseNames);
+  const sym = name ? `${ticker} (${name})` : ticker;
 
   switch (a.type) {
     case 'TRIM':
@@ -100,67 +104,38 @@ function explainAction(a) {
     default:
       return {
         en: a.reason || 'Rule suggestion.',
-        zh: '规则建议。',
+        zh: a.reason || '规则建议。',
       };
   }
 }
 
-function shareLine(approx) {
-  if (approx == null || !Number.isFinite(Number(approx))) return '';
-  const n = Number(approx);
-  return `About ${n} shares / 约 ${n} 股`;
-}
-
-export default function ActionsTab({ loading, ruleActions, whyNoActions }) {
+export default function ActionsTab({ lang, chineseNames = {}, loading, ruleActions, whyNoActions }) {
   const actions = Array.isArray(ruleActions) ? ruleActions : [];
   const why = Array.isArray(whyNoActions) ? whyNoActions : [];
 
-  const intro = (
-    <p className="stat-hint">
-      Rule suggestions after Analyze — the app does not place trades.
-      <span className="zh-block">这些是 Analyze 之后的规则建议，应用不会自动下单。</span>
-    </p>
-  );
+  const intro = <p className="stat-hint">{t(lang, 'actionsIntro')}</p>;
 
   if (actions.length === 0) {
     if (loading && why.length === 0) {
-      return (
-        <p className="empty">
-          Analyzing…
-          <span className="zh-inline"> 分析中…</span>
-        </p>
-      );
+      return <p className="empty">{t(lang, 'analyzing')}</p>;
     }
     return (
       <>
         {loading ? (
           <p className="meta" style={{ marginBottom: 10 }}>
-            Updating… last result stays visible until Analyze finishes.
-            <span className="zh-inline"> 更新中… 上次结果会留到新分析完成。</span>
+            {t(lang, 'actionsUpdating')}
           </p>
         ) : null}
         {intro}
-        <p className="empty">
-          Nothing to trade right now.
-          <span className="zh-inline"> 现在没有建议操作。</span>
-        </p>
+        <p className="empty">{t(lang, 'nothingToTrade')}</p>
         {why.length > 0 ? (
           <ul className="why-list">
-            {why.map((line, idx) => {
-              const copy = humanWhy(line);
-              return (
-                <li key={`${line}-${idx}`}>
-                  <span>{copy.en}</span>
-                  {copy.zh ? <span className="zh-block">{copy.zh}</span> : null}
-                </li>
-              );
-            })}
+            {why.map((line, idx) => (
+              <li key={`${line}-${idx}`}>{pick(humanWhy(line), lang)}</li>
+            ))}
           </ul>
         ) : !loading ? (
-          <p className="meta">
-            Run Analyze to see whether the rules would sell, refill cash, or buy.
-            <span className="zh-inline"> 点 Analyze 查看规则会不会减仓、补现金或买入。</span>
-          </p>
+          <p className="meta">{t(lang, 'actionsRunAnalyze')}</p>
         ) : null}
       </>
     );
@@ -170,48 +145,41 @@ export default function ActionsTab({ loading, ruleActions, whyNoActions }) {
     <>
       {loading ? (
         <p className="meta" style={{ marginBottom: 10 }}>
-          Updating… last actions stay visible until Analyze finishes.
-          <span className="zh-inline"> 更新中… 上次建议会留到新分析完成。</span>
+          {t(lang, 'actionsUpdating')}
         </p>
       ) : null}
       {intro}
       <ul className="action-list">
         {actions.map((a, idx) => {
           const type = TYPE_COPY[a.type] || { en: a.type, zh: a.type };
-          const whyDo = explainAction(a);
-          const shares = shareLine(a.approx_shares);
+          const whyDo = explainAction(a, lang, chineseNames);
+          const approx = a.approx_shares;
+          const name = displayName(a.symbol, lang, chineseNames);
           return (
             <li key={`${a.type}-${a.symbol}-${idx}`} className="action-item">
               <div className="head">
-                <span>{a.symbol}</span>
+                <span className="ticker-stack">
+                  <span>{a.symbol}</span>
+                  {name ? <span className="ticker-name">{name}</span> : null}
+                </span>
                 <span>{money(a.trade_usd)}</span>
               </div>
-              {shares ? (
+              {approx != null && Number.isFinite(Number(approx)) ? (
                 <p className="meta" style={{ marginTop: 4 }}>
-                  {shares}
+                  {t(lang, 'aboutShares', { n: Number(approx) })}
                 </p>
               ) : null}
-              <p className="action-verb">
-                {type.en}
-                <span className="zh-block">{type.zh}</span>
-              </p>
-              <p className="reason">{whyDo.en}</p>
-              {whyDo.zh ? <p className="zh">{whyDo.zh}</p> : null}
+              <p className="action-verb">{pick(type, lang)}</p>
+              <p className="reason">{pick(whyDo, lang)}</p>
             </li>
           );
         })}
       </ul>
       {why.length > 0 ? (
         <ul className="why-list" style={{ marginTop: 12 }}>
-          {why.map((line, idx) => {
-            const copy = humanWhy(line);
-            return (
-              <li key={`${line}-${idx}`}>
-                <span>{copy.en}</span>
-                {copy.zh ? <span className="zh-block">{copy.zh}</span> : null}
-              </li>
-            );
-          })}
+          {why.map((line, idx) => (
+            <li key={`${line}-${idx}`}>{pick(humanWhy(line), lang)}</li>
+          ))}
         </ul>
       ) : null}
     </>

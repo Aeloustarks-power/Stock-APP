@@ -81,6 +81,7 @@ from backend.portfolio import (
     PortfolioPayload,
     PortfolioReplacePayload,
     PortfolioResponse,
+    TickerNamePayload,
     _create_supabase_client,
     _extract_cash_from_rows,
     _normalize_portfolio_id_value,
@@ -1533,6 +1534,7 @@ def create_app() -> FastAPI:
     cfg = load_policy_config_from_env()
     supabase = _create_supabase_client()
     portfolio_table = os.getenv("SUPABASE_PORTFOLIO_TABLE", "portfolio")
+    ticker_names_table = os.getenv("SUPABASE_TICKER_NAMES_TABLE", "ticker_names")
 
     def require_supabase() -> Client:
         if not supabase:
@@ -1542,7 +1544,21 @@ def create_app() -> FastAPI:
             )
         return supabase
 
-    if PortfolioPayload is None or PortfolioResponse is None:  # pragma: no cover
+    def _ticker_names_unavailable(exc: Any) -> HTTPException:
+        return HTTPException(
+            status_code=503,
+            detail=(
+                "ticker_names table is missing. In Supabase SQL editor run the script "
+                "scripts/ticker_names.sql (symbol + name_zh)."
+            ),
+        )
+
+    def _raise_if_ticker_names_missing(exc: Any) -> None:
+        blob = f"{exc} {_postgrest_error_message(exc)}".lower()
+        if "does not exist" in blob or "schema cache" in blob or "pgrst205" in blob:
+            raise _ticker_names_unavailable(exc) from exc
+
+    if PortfolioPayload is None or PortfolioResponse is None or TickerNamePayload is None:  # pragma: no cover
         raise RuntimeError("pydantic is not installed")
 
     def _effective_portfolio_id(
@@ -1697,6 +1713,37 @@ def create_app() -> FastAPI:
         rows = q2.order("symbol").execute().data or []
         cash_usd, holding_rows = _extract_cash_from_rows(rows, portfolio_id=pid)
         return {"items": holding_rows, "cash_usd": cash_usd}
+
+    @app.get("/api/ticker-names")
+    async def list_ticker_names():
+        sb = require_supabase()
+        try:
+            rows = sb.table(ticker_names_table).select("symbol,name_zh").execute().data or []
+        except Exception as exc:
+            _raise_if_ticker_names_missing(exc)
+            raise
+        items = []
+        for r in rows:
+            sym = _normalize_symbol(str(r.get("symbol") or ""))
+            zh = str(r.get("name_zh") or "").strip()
+            if sym and zh:
+                items.append({"symbol": sym, "name_zh": zh})
+        return {"items": items}
+
+    @app.put("/api/ticker-names")
+    async def upsert_ticker_name(body: TickerNamePayload = Body(...)):
+        sb = require_supabase()
+        symbol = _normalize_symbol(body.symbol)
+        name_zh = str(body.name_zh or "").strip()
+        try:
+            dq = sb.table(ticker_names_table).delete().eq("symbol", symbol)
+            dq.execute()
+            if name_zh:
+                sb.table(ticker_names_table).insert({"symbol": symbol, "name_zh": name_zh}).execute()
+        except Exception as exc:
+            _raise_if_ticker_names_missing(exc)
+            raise
+        return {"symbol": symbol, "name_zh": name_zh}
 
     @app.post("/api/portfolio")
     async def add_to_portfolio(
