@@ -222,6 +222,7 @@ def refresh_market_snapshots(
                 "rsi": metrics["rsi"],
                 "high_52w_percentile": metrics["high_52w_percentile"],
                 "near_52w_high_pct": metrics["near_52w_high_pct"],
+                "short_history": bool(metrics.get("short_history")),
             }
             sym_map[sym] = {"ts": now, "metrics": snap}
             updated += 1
@@ -267,6 +268,7 @@ def _calc_position_metrics_cached(
                     _safe_float(snap.get("high_52w_percentile")), 4
                 ),
                 "near_52w_high_pct": round(_safe_float(snap.get("near_52w_high_pct")), 4),
+                "short_history": bool(snap.get("short_history")),
                 "from_snapshot": True,
             }
     live = _calc_position_metrics(symbol, shares, cost_basis)
@@ -329,16 +331,33 @@ def _calc_position_metrics(symbol: str, shares: float, cost_basis: float) -> Dic
     if yf is None:  # pragma: no cover
         raise RuntimeError("yfinance is not installed")
     hist = yf.Ticker(sym).history(period="1y", auto_adjust=True)
-    if "Close" not in hist or hist["Close"].dropna().shape[0] < 60:
+    if "Close" not in hist:
+        raise ValueError(f"{sym}: no price history.")
+    close_series = hist["Close"].dropna()
+    n = int(close_series.shape[0])
+    if n < 1:
         raise ValueError(f"{sym}: not enough price history.")
 
-    close_series = hist["Close"].dropna()
     current = float(close_series.iloc[-1])
-    ma20 = float(close_series.rolling(window=20).mean().iloc[-1])
-    rsi = float(calculate_rsi(close_series).iloc[-1])
+    # New listings (e.g. SKHY) often have a last close but <60 US sessions.
+    # Keep last price; only skip 52-week take-profit until a fuller year exists.
+    short_history = n < 60
 
-    pctile, _, high_52w = _position_52w_high_percentile(hist)
-    near_high = 0.0 if high_52w <= 0 else (high_52w - current) / high_52w
+    ma20 = 0.0
+    if n >= 20:
+        ma20 = float(close_series.rolling(window=20).mean().iloc[-1])
+
+    rsi = 0.0
+    if n >= 20:
+        rsi_series = calculate_rsi(close_series).dropna()
+        if not rsi_series.empty:
+            rsi = float(rsi_series.iloc[-1])
+
+    if short_history:
+        pctile, near_high = 0.0, 1.0
+    else:
+        pctile, _, high_52w = _position_52w_high_percentile(hist)
+        near_high = 0.0 if high_52w <= 0 else (high_52w - current) / high_52w
 
     position_value = shares * current
     total_cost = shares * cost_basis
@@ -356,6 +375,7 @@ def _calc_position_metrics(symbol: str, shares: float, cost_basis: float) -> Dic
         "pnl": round(pnl, 2),
         "high_52w_percentile": round(pctile, 4),
         "near_52w_high_pct": round(near_high, 4),
+        "short_history": short_history,
     }
 
 

@@ -603,6 +603,8 @@ def _policy_actions(
         w = _safe_float(p.get("weight_pct"), 0.0) / 100.0
         if w <= cfg.overweight_pct:
             continue
+        if p.get("short_history"):
+            continue
         pctile = _safe_float(p.get("high_52w_percentile"), 0.0)
         near_high = _safe_float(p.get("near_52w_high_pct"), 1.0)
         is_high = (pctile >= cfg.take_profit_52w_percentile) or (
@@ -1239,6 +1241,10 @@ def run_portfolio_analysis(
                     _try_persist_portfolio_sector(
                         sb, portfolio_table, sym, label, portfolio_id=resolved_id
                     )
+            if pos.get("short_history"):
+                warnings.append(
+                    f"{sym}: new listing — last price used; 52-week rule skipped."
+                )
             positions.append(pos)
         except Exception as e:
             warnings.append(f"{row.get('symbol')}: data error — {str(e)}")
@@ -1422,6 +1428,10 @@ def run_idea_search(
             )
             stored_sec = _portfolio_sector_from_row(row)
             pos["sector"] = stored_sec or _yfinance_sector_label(sym)
+            if pos.get("short_history"):
+                warnings.append(
+                    f"{sym}: new listing — last price used; 52-week rule skipped."
+                )
             positions.append(pos)
         except Exception as e:
             warnings.append(f"{row.get('symbol')}: data error — {str(e)}")
