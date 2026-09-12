@@ -56,16 +56,21 @@ function looksLikeLocalhostBuildOnPhone() {
   return apiIsLocal && !onLocalPage;
 }
 
-export function friendlyNetworkError(err) {
+export function friendlyNetworkError(err, lang = 'en') {
   const msg = err?.message || String(err || '');
   const failedFetch = err?.name === 'TypeError' || /failed to fetch|networkerror|load failed/i.test(msg);
+  const zh = lang === 'zh';
   if (looksLikeLocalhostBuildOnPhone()) {
-    return 'This site is calling localhost, which does not work on a phone. Set VITE_API_BASE on Netlify to the Render URL and redeploy.';
+    return zh
+      ? '这个站点在请求本机地址，手机打不开。请在 Netlify 把 VITE_API_BASE 设成 Render 地址再发布。'
+      : 'This site is calling localhost, which does not work on a phone. Set VITE_API_BASE on Netlify to the Render URL and redeploy.';
   }
   if (failedFetch) {
-    return 'Could not reach the API. Render sleeps when idle — the first request can take 30–60 seconds. Wait and tap Retry.';
+    return zh
+      ? '连不上 API。Render 空闲会休眠，第一次请求可能要 30–60 秒。等一下再点重试。'
+      : 'Could not reach the API. Render sleeps when idle — the first request can take 30–60 seconds. Wait and tap Retry.';
   }
-  return msg || 'Request failed';
+  return msg || (zh ? '请求失败' : 'Request failed');
 }
 
 async function rawFetch(path, options = {}) {

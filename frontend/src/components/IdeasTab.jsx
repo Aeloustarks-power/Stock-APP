@@ -1,6 +1,10 @@
 import React from 'react';
+import { pickField, t } from '../i18n.js';
+import { displayName } from '../tickerNames.js';
 
 export default function IdeasTab({
+  lang,
+  chineseNames = {},
   loading,
   suggestedBuys,
   onMoreIdeas,
@@ -9,11 +13,13 @@ export default function IdeasTab({
 }) {
   let webhookNote = '';
   if (webhook && webhook.skipped) {
-    webhookNote = 'Sheet webhook is off (no IDEAS_WEBHOOK_URL).';
+    webhookNote = t(lang, 'webhookOff');
   } else if (webhook && webhook.ok) {
-    webhookNote = 'Posted this batch to your Google web app.';
+    webhookNote = t(lang, 'webhookOk');
   } else if (webhook && webhook.ok === false) {
-    webhookNote = `Webhook failed${webhook.error ? `: ${webhook.error}` : ''}. Ideas on this page are still saved.`;
+    webhookNote = t(lang, 'webhookFail', {
+      err: webhook.error ? `: ${webhook.error}` : '',
+    });
   }
 
   return (
@@ -25,40 +31,48 @@ export default function IdeasTab({
           onClick={onMoreIdeas}
           disabled={loading || moreLoading}
         >
-          {moreLoading ? 'Finding ideas…' : 'More ideas'}
+          {moreLoading ? t(lang, 'findingIdeas') : t(lang, 'moreIdeas')}
         </button>
-        <span className="meta">
-          Skips holdings and names already shown this visit. Catalyst + risk from Gemini.
-        </span>
+        <span className="meta">{t(lang, 'ideasHint')}</span>
       </div>
       {webhookNote ? <p className="meta">{webhookNote}</p> : null}
       {!loading && !moreLoading && suggestedBuys.length === 0 && (
-        <p className="empty">Tap More ideas (or Analyze) for portfolio-aware suggested buys.</p>
+        <p className="empty">{t(lang, 'ideasEmpty')}</p>
       )}
       {(loading || moreLoading) && suggestedBuys.length === 0 && (
-        <p className="empty">Screening Nasdaq-100 then ranking with Gemini. Can take up to a minute.</p>
+        <p className="empty">{t(lang, 'ideasScreening')}</p>
       )}
       <div className="idea-list">
-        {suggestedBuys.slice(0, 3).map((s) => (
-          <article key={s.symbol} className="idea-card">
-            <div className="head">
-              <span>{s.symbol}</span>
-              <span>
-                {(Number(s.confidence || 0) * 100).toFixed(0)}%
-                {s.metrics?.price != null ? ` · $${s.metrics.price}` : ''}
-                {s.metrics?.rsi != null ? ` · RSI ${s.metrics.rsi}` : ''}
-              </span>
-            </div>
-            <p><strong>Thesis:</strong> {s.thesis || '—'}</p>
-            {s.thesis_zh ? <p className="zh">{s.thesis_zh}</p> : null}
-            <p><strong>Fit:</strong> {s.fit || '—'}</p>
-            {s.fit_zh ? <p className="zh">{s.fit_zh}</p> : null}
-            <p><strong>Catalyst:</strong> {s.catalyst || '—'}</p>
-            {s.catalyst_zh ? <p className="zh">{s.catalyst_zh}</p> : null}
-            <p><strong>Risk:</strong> {s.risk || '—'}</p>
-            {s.risk_zh ? <p className="zh">{s.risk_zh}</p> : null}
-          </article>
-        ))}
+        {suggestedBuys.slice(0, 3).map((s) => {
+          const name = displayName(s.symbol, lang, chineseNames);
+          return (
+            <article key={s.symbol} className="idea-card">
+              <div className="head">
+                <span className="ticker-stack">
+                  <span>{s.symbol}</span>
+                  {name ? <span className="ticker-name">{name}</span> : null}
+                </span>
+                <span>
+                  {(Number(s.confidence || 0) * 100).toFixed(0)}%
+                  {s.metrics?.price != null ? ` · $${s.metrics.price}` : ''}
+                  {s.metrics?.rsi != null ? ` · RSI ${s.metrics.rsi}` : ''}
+                </span>
+              </div>
+              <p>
+                <strong>{t(lang, 'thesis')}:</strong> {pickField(s, 'thesis', lang) || '—'}
+              </p>
+              <p>
+                <strong>{t(lang, 'fit')}:</strong> {pickField(s, 'fit', lang) || '—'}
+              </p>
+              <p>
+                <strong>{t(lang, 'catalyst')}:</strong> {pickField(s, 'catalyst', lang) || '—'}
+              </p>
+              <p>
+                <strong>{t(lang, 'risk')}:</strong> {pickField(s, 'risk', lang) || '—'}
+              </p>
+            </article>
+          );
+        })}
       </div>
     </>
   );

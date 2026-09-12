@@ -5,20 +5,15 @@ import IdeasTab from './IdeasTab.jsx';
 import AiTab from './AiTab.jsx';
 import ToolsTab from './ToolsTab.jsx';
 import { formatSavedAt } from '../lastAnalysis.js';
-
-const TABS = [
-  { id: 'overview', label: 'Overview' },
-  { id: 'actions', label: 'Actions' },
-  { id: 'ideas', label: 'Ideas' },
-  { id: 'ai', label: 'AI' },
-  { id: 'tools', label: 'Tools' },
-];
+import { t } from '../i18n.js';
 
 /**
  * Right-hand analysis column. App.jsx still owns Analyze results and tab id.
  * This file only switches which tab to draw.
  */
 export default function AnalysisPane({
+  lang,
+  chineseNames = {},
   activeTab,
   onTabChange,
   loading,
@@ -46,11 +41,19 @@ export default function AnalysisPane({
   webhook,
   savedAt,
 }) {
+  const tabs = [
+    { id: 'overview', key: 'tabOverview' },
+    { id: 'actions', key: 'tabActions' },
+    { id: 'ideas', key: 'tabIdeas' },
+    { id: 'ai', key: 'tabAi' },
+    { id: 'tools', key: 'tabTools' },
+  ];
+
   return (
-    <section className="pane" aria-label="Analysis">
+    <section className="pane" aria-label={t(lang, 'analysis')}>
       <div className="pane-header">
         <div className="tabs" role="tablist">
-          {TABS.map((tab) => (
+          {tabs.map((tab) => (
             <button
               key={tab.id}
               type="button"
@@ -59,18 +62,22 @@ export default function AnalysisPane({
               className={`tab${activeTab === tab.id ? ' active' : ''}`}
               onClick={() => onTabChange(tab.id)}
             >
-              {tab.label}
+              {t(lang, tab.key)}
             </button>
           ))}
         </div>
         {savedAt ? (
-          <span className="meta last-saved">Last saved {formatSavedAt(savedAt)}</span>
+          <span className="meta last-saved">
+            {t(lang, 'lastSaved', { t: formatSavedAt(savedAt, lang) })}
+          </span>
         ) : null}
       </div>
 
       <div className="tab-body" role="tabpanel">
         {activeTab === 'overview' && (
           <OverviewTab
+            lang={lang}
+            chineseNames={chineseNames}
             loading={loading}
             totals={totals}
             warnings={warnings}
@@ -82,6 +89,8 @@ export default function AnalysisPane({
         )}
         {activeTab === 'actions' && (
           <ActionsTab
+            lang={lang}
+            chineseNames={chineseNames}
             loading={loading}
             ruleActions={ruleActions}
             whyNoActions={whyNoActions}
@@ -89,6 +98,8 @@ export default function AnalysisPane({
         )}
         {activeTab === 'ideas' && (
           <IdeasTab
+            lang={lang}
+            chineseNames={chineseNames}
             loading={loading}
             suggestedBuys={suggestedBuys}
             onMoreIdeas={onMoreIdeas}
@@ -96,11 +107,11 @@ export default function AnalysisPane({
             webhook={webhook}
           />
         )}
-        {activeTab === 'ai' && (
-          <AiTab loading={loading} note={aiNote} />
-        )}
+        {activeTab === 'ai' && <AiTab lang={lang} loading={loading} note={aiNote} />}
         {activeTab === 'tools' && (
           <ToolsTab
+            lang={lang}
+            chineseNames={chineseNames}
             peekSymbol={peekSymbol}
             onPeekSymbolChange={onPeekSymbolChange}
             onPeek={onPeek}

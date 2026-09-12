@@ -34,11 +34,11 @@ export function saveLastAnalysis(portfolioId, patch) {
   return next;
 }
 
-export function formatSavedAt(iso) {
+export function formatSavedAt(iso, lang = 'en') {
   if (!iso) return '';
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return '';
-  return d.toLocaleString(undefined, {
+  return d.toLocaleString(lang === 'zh' ? 'zh-CN' : 'en-US', {
     dateStyle: 'medium',
     timeStyle: 'short',
   });

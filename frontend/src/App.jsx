@@ -12,6 +12,7 @@ import {
   setSiteToken,
 } from './api.js';
 import { loadLastAnalysis, saveLastAnalysis } from './lastAnalysis.js';
+import { loadLang, saveLang, t, remapKnownError } from './i18n.js';
 
 const PROFILES = [
   { id: 'Eric', label: 'Eric' },
@@ -76,6 +77,7 @@ function dipFromReport(report) {
 }
 
 function App() {
+  const [lang, setLang] = useState(loadLang);
   const [unlocked, setUnlocked] = useState(false);
   const [authChecking, setAuthChecking] = useState(true);
   const [passwordInput, setPasswordInput] = useState('');
@@ -117,6 +119,22 @@ function App() {
   const [cashFloorPct, setCashFloorPct] = useState(0.15);
   const [whyNoActions, setWhyNoActions] = useState([]);
   const [ideasWebhook, setIdeasWebhook] = useState(null);
+  const [nameRev, setNameRev] = useState(0);
+  const [chineseNames, setChineseNames] = useState({});
+
+  const handleLangChange = (next) => {
+    const nextLang = next === 'zh' ? 'zh' : 'en';
+    setLang(nextLang);
+    saveLang(nextLang);
+    setAuthError((prev) => (prev ? remapKnownError(prev, nextLang) : prev));
+    setError((prev) => (prev ? remapKnownError(prev, nextLang) : prev));
+    setPortfolioError((prev) => (prev ? remapKnownError(prev, nextLang) : prev));
+    setAiError((prev) => (prev ? remapKnownError(prev, nextLang) : prev));
+  };
+
+  useEffect(() => {
+    document.documentElement.lang = lang === 'zh' ? 'zh-CN' : 'en';
+  }, [lang]);
 
   const fetchPortfolio = useCallback(async () => {
     setPortfolioLoading(true);
@@ -127,7 +145,7 @@ function App() {
       );
       if (!response.ok) {
         const errPayload = await response.json().catch(() => ({}));
-        throw new Error(formatApiErrorDetail(errPayload?.detail) || 'Unable to load portfolio');
+        throw new Error(formatApiErrorDetail(errPayload?.detail) || t(lang, 'requestFailed'));
       }
       const data = await response.json();
       const items = Array.isArray(data?.items) ? data.items : [];
@@ -143,11 +161,11 @@ function App() {
           : [emptyRow()]
       );
     } catch (err) {
-      setPortfolioError(friendlyNetworkError(err));
+      setPortfolioError(friendlyNetworkError(err, lang));
     } finally {
       setPortfolioLoading(false);
     }
-  }, [selectedPortfolio]);
+  }, [selectedPortfolio, lang]);
 
   useEffect(() => {
     const lock = () => setUnlocked(false);
@@ -186,7 +204,7 @@ function App() {
       } catch (err) {
         if (!cancelled) {
           setUnlocked(false);
-          setAuthError(friendlyNetworkError(err));
+          setAuthError(friendlyNetworkError(err, lang));
         }
       } finally {
         if (!cancelled) setAuthChecking(false);
@@ -197,11 +215,37 @@ function App() {
     };
   }, [authNonce]);
 
+  const fetchTickerNames = useCallback(async () => {
+    try {
+      const response = await apiFetch('/api/ticker-names');
+      if (!response.ok) {
+        if (response.status === 503) return;
+        const errPayload = await response.json().catch(() => ({}));
+        throw new Error(formatApiErrorDetail(errPayload?.detail) || t(lang, 'requestFailed'));
+      }
+      const data = await response.json();
+      const next = {};
+      for (const item of Array.isArray(data?.items) ? data.items : []) {
+        const sym = String(item?.symbol || '').trim().toUpperCase();
+        const zh = String(item?.name_zh || '').trim();
+        if (sym && zh) next[sym] = zh;
+      }
+      setChineseNames(next);
+    } catch (err) {
+      setError(friendlyNetworkError(err, lang));
+    }
+  }, [lang]);
+
   useEffect(() => {
     if (!unlocked) return;
     setEditingHoldings(false);
     fetchPortfolio();
   }, [fetchPortfolio, unlocked]);
+
+  useEffect(() => {
+    if (!unlocked) return;
+    fetchTickerNames();
+  }, [fetchTickerNames, unlocked]);
 
   useEffect(() => {
     const saved = loadLastAnalysis(selectedPortfolio);
@@ -250,12 +294,12 @@ function App() {
 
   const applyBulkPaste = () => {
     if (!editingHoldings) {
-      setError('Tap Edit before pasting holdings.');
+      setError(t(lang, 'tapEditBeforePaste'));
       return;
     }
     const parsed = parseBulkPaste(bulkText);
     if (!parsed.length) {
-      setError('Bulk paste needs lines like AAPL,10,180.5');
+      setError(t(lang, 'bulkNeedsLines'));
       return;
     }
     setError(null);
@@ -279,18 +323,18 @@ function App() {
       const shares = Number(row.shares);
       const cost_basis = Number(row.cost_basis);
       if (!Number.isFinite(shares) || shares <= 0) {
-        setError(`${symbol}: shares must be a positive number`);
+        setError(t(lang, 'sharesPositive', { s: symbol }));
         return;
       }
       if (!Number.isFinite(cost_basis) || cost_basis < 0) {
-        setError(`${symbol}: cost basis must be >= 0`);
+        setError(t(lang, 'costNonNeg', { s: symbol }));
         return;
       }
       holdings.push({ symbol, shares, cost_basis });
     }
     const cash = Number(cashUsd);
     if (!Number.isFinite(cash) || cash < 0) {
-      setError('Cash must be zero or a positive number');
+      setError(t(lang, 'cashNonNeg'));
       return;
     }
 
@@ -328,7 +372,7 @@ function App() {
       );
       setEditingHoldings(false);
     } catch (err) {
-      setError(friendlyNetworkError(err));
+      setError(friendlyNetworkError(err, lang));
     } finally {
       setPortfolioSaving(false);
     }
@@ -354,7 +398,7 @@ function App() {
       }
       setStockData(await response.json());
     } catch (err) {
-      setError(friendlyNetworkError(err));
+      setError(friendlyNetworkError(err, lang));
     } finally {
       setQuoteLoading(false);
     }
@@ -439,7 +483,7 @@ function App() {
       });
       setAnalysisSavedAt(stored.savedAt);
     } catch (err) {
-      setAiError(friendlyNetworkError(err));
+      setAiError(friendlyNetworkError(err, lang));
     } finally {
       setAiLoading(false);
     }
@@ -468,7 +512,7 @@ function App() {
       if (!next.length) {
         throw new Error(
           data?.suggest_error ||
-            'No new names in the screen. Try again later or run Analyze first.'
+            t(lang, 'noNewNames')
         );
       }
       setSuggestedBuys(next);
@@ -488,7 +532,7 @@ function App() {
       });
       setAnalysisSavedAt(stored.savedAt);
     } catch (err) {
-      setAiError(friendlyNetworkError(err));
+      setAiError(friendlyNetworkError(err, lang));
     } finally {
       setIdeasLoading(false);
     }
@@ -512,7 +556,7 @@ function App() {
         symbol_count: data.symbol_count,
       });
     } catch (err) {
-      setError(friendlyNetworkError(err));
+      setError(friendlyNetworkError(err, lang));
     } finally {
       setRefreshingSnapshots(false);
     }
@@ -530,7 +574,7 @@ function App() {
       });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) {
-        throw new Error(formatApiErrorDetail(payload?.detail) || 'Wrong password');
+        throw new Error(formatApiErrorDetail(payload?.detail) || t(lang, 'wrongPassword'));
       }
       if (payload.required === false) {
         setSiteToken('');
@@ -539,13 +583,13 @@ function App() {
         return;
       }
       if (!payload.token) {
-        throw new Error('Wrong password');
+        throw new Error(t(lang, 'wrongPassword'));
       }
       setSiteToken(payload.token);
       setUnlocked(true);
       setPasswordInput('');
     } catch (err) {
-      setAuthError(friendlyNetworkError(err) || 'Wrong password');
+      setAuthError(friendlyNetworkError(err, lang) || t(lang, 'wrongPassword'));
     } finally {
       setAuthBusy(false);
     }
@@ -565,6 +609,8 @@ function App() {
   if (authChecking || !unlocked) {
     return (
       <LockScreen
+        lang={lang}
+        onLangChange={handleLangChange}
         checking={authChecking}
         password={passwordInput}
         error={authError}
@@ -579,6 +625,8 @@ function App() {
   return (
     <div className="app-shell">
       <TopBar
+        lang={lang}
+        onLangChange={handleLangChange}
         profiles={PROFILES}
         selectedPortfolio={selectedPortfolio}
         onPortfolioChange={setSelectedPortfolio}
@@ -600,7 +648,7 @@ function App() {
 
       {wakingServer && (
         <div className="banner banner-info" role="status">
-          Waking the API… Render sleeps when idle. This can take 30–60 seconds.
+          {t(lang, 'waking')}
         </div>
       )}
 
@@ -610,7 +658,7 @@ function App() {
           <span>{banner}</span>
           {portfolioError ? (
             <button type="button" className="btn" onClick={fetchPortfolio}>
-              Retry
+              {t(lang, 'retry')}
             </button>
           ) : null}
         </div>
@@ -618,16 +666,48 @@ function App() {
 
       <div className="workspace">
         <HoldingsTable
+          lang={lang}
           rows={rows}
           loading={portfolioLoading}
           editing={editingHoldings}
           loadError={null}
+          nameRev={nameRev}
+          chineseNames={chineseNames}
           onUpdateRow={updateRow}
           onRemoveRow={removeRow}
           onRetry={fetchPortfolio}
+          onSaveChineseName={async (symbol, zh) => {
+            const ticker = String(symbol || '').trim().toUpperCase();
+            if (!ticker) return;
+            setError(null);
+            try {
+              const response = await apiFetch('/api/ticker-names', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ symbol: ticker, name_zh: zh }),
+              });
+              if (!response.ok) {
+                const errPayload = await response.json().catch(() => ({}));
+                throw new Error(formatApiErrorDetail(errPayload?.detail) || t(lang, 'requestFailed'));
+              }
+              const data = await response.json();
+              const saved = String(data?.name_zh || '').trim();
+              setChineseNames((prev) => {
+                const next = { ...prev };
+                if (saved) next[ticker] = saved;
+                else delete next[ticker];
+                return next;
+              });
+              setNameRev((n) => n + 1);
+            } catch (err) {
+              setError(friendlyNetworkError(err, lang));
+            }
+          }}
         />
 
         <AnalysisPane
+          lang={lang}
+          chineseNames={chineseNames}
           activeTab={activeTab}
           onTabChange={setActiveTab}
           loading={aiLoading}

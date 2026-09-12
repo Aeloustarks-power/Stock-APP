@@ -1,6 +1,10 @@
 import React from 'react';
+import { t } from '../i18n.js';
+import { displayName } from '../tickerNames.js';
 
 export default function ToolsTab({
+  lang,
+  chineseNames = {},
   peekSymbol,
   onPeekSymbolChange,
   onPeek,
@@ -11,7 +15,9 @@ export default function ToolsTab({
   onApplyBulkPaste,
   editing,
 }) {
-  const displaySymbol = stockData?.shortName ?? stockData?.symbol ?? '';
+  const ticker = stockData?.symbol || '';
+  const mapped = displayName(ticker, lang, chineseNames);
+  const displaySymbol = mapped || stockData?.shortName || ticker;
   const displayPrice = stockData?.price ?? stockData?.regularMarketPrice;
   const inferredAdvice =
     stockData?.advice ??
@@ -30,7 +36,7 @@ export default function ToolsTab({
   return (
     <div className="tools-stack">
       <div>
-        <h3 className="section-title">Quick quote</h3>
+        <h3 className="section-title">{t(lang, 'quickQuote')}</h3>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <input
             className="input mono ticker-input"
@@ -46,20 +52,22 @@ export default function ToolsTab({
               const next = e.currentTarget.value.trim().toUpperCase();
               if (next !== peekSymbol) onPeekSymbolChange(next);
             }}
-            placeholder="Ticker"
+            placeholder={t(lang, 'ticker')}
             style={{ width: 140 }}
           />
           <button type="button" className="btn btn-primary" onClick={onPeek}>
-            {quoteLoading ? '…' : 'Peek'}
+            {quoteLoading ? '…' : t(lang, 'peek')}
           </button>
         </div>
         {stockData && (
           <div className="quote-grid">
             <div>
-              <div style={{ fontFamily: 'var(--font-brand)', fontWeight: 700 }}>{displaySymbol}</div>
+              <div style={{ fontFamily: 'var(--font-brand)', fontWeight: 700 }}>
+                {ticker ? `${ticker}${mapped ? ` · ${mapped}` : ''}` : displaySymbol}
+              </div>
               <div className="quote-price">{displayPrice != null ? `$${displayPrice}` : '—'}</div>
               <div className={adviceOk ? 'advice-ok' : 'advice-warn'}>
-                <strong>ADVICE:</strong> {inferredAdvice}
+                <strong>{t(lang, 'advice')}:</strong> {inferredAdvice}
               </div>
             </div>
             <div className="mono" style={{ fontSize: 13 }}>
@@ -71,11 +79,15 @@ export default function ToolsTab({
       </div>
 
       <div>
-        <h3 className="section-title">Bulk paste</h3>
+        <h3 className="section-title">{t(lang, 'bulkPaste')}</h3>
         <p className="empty" style={{ marginBottom: 8 }}>
-          {editing
-            ? <>Lines like <span className="mono">AAPL,10,180.5</span></>
-            : 'Tap Edit in the top bar before pasting holdings.'}
+          {editing ? (
+            <>
+              {t(lang, 'bulkLinesLike')} <span className="mono">AAPL,10,180.5</span>
+            </>
+          ) : (
+            t(lang, 'bulkNeedEdit')
+          )}
         </p>
         <textarea
           className="textarea"
@@ -92,7 +104,7 @@ export default function ToolsTab({
           onClick={onApplyBulkPaste}
           disabled={!editing}
         >
-          Apply paste
+          {t(lang, 'applyPaste')}
         </button>
       </div>
     </div>

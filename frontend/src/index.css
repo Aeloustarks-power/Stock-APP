@@ -117,6 +117,65 @@ button {
   white-space: nowrap;
 }
 
+.lang-switch {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  flex: 0 0 auto;
+}
+
+.lang-switch button {
+  border: 0;
+  background: transparent;
+  padding: 6px 9px;
+  min-height: 34px;
+  font-weight: 700;
+  font-size: 12px;
+  color: var(--ink);
+}
+
+.lang-switch button.active {
+  background: var(--ink);
+  color: #fffcf8;
+}
+
+.ticker-stack {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 1px;
+}
+
+.ticker-name {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--ink-muted);
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.holdings-table .ticker-name {
+  padding: 0 8px 4px;
+}
+
+.chinese-name-hint {
+  padding: 0 12px 8px;
+}
+
+.chinese-name-input {
+  width: 100%;
+  border: 1px solid var(--border);
+  background: #fff;
+  border-radius: 6px;
+  padding: 4px 8px;
+  min-height: 28px;
+  margin: 0 0 4px;
+  font-size: 12px;
+}
+
 .topbar-controls {
   display: flex;
   align-items: center;
@@ -419,12 +478,12 @@ button {
   letter-spacing: 0.04em;
 }
 
-.stat .label .zh {
+.stat .label .zh-only {
   text-transform: none;
   letter-spacing: 0;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--ink);
-  opacity: 0.85;
+  opacity: 1;
 }
 
 .stat .value {
@@ -477,7 +536,7 @@ button {
 
 .weight-row {
   display: grid;
-  grid-template-columns: 56px minmax(48px, 1fr) 48px 72px;
+  grid-template-columns: minmax(72px, 92px) minmax(48px, 1fr) 48px 72px;
   gap: 6px;
   align-items: center;
   font-size: 12px;
@@ -785,6 +844,11 @@ button {
   display: flex;
   align-items: center;
   gap: 10px;
+  flex-wrap: wrap;
+}
+
+.lock-brand .lang-switch {
+  margin-left: auto;
 }
 
 .lock-brand h1 {

@@ -1,11 +1,15 @@
 import React from 'react';
 import { BarChart3, Plus, RefreshCw, Lock, Pencil } from 'lucide-react';
+import LangToggle from './LangToggle.jsx';
+import { t } from '../i18n.js';
 
 /**
  * Top strip only. App.jsx still owns portfolio, cash, save, analyze, lock.
  * Cash / add-row / save stay disabled until `editing` is on.
  */
 export default function TopBar({
+  lang,
+  onLangChange,
   profiles,
   selectedPortfolio,
   onPortfolioChange,
@@ -28,12 +32,13 @@ export default function TopBar({
     <header className="topbar">
       <div className="brand">
         <BarChart3 size={26} color="#1c1917" />
-        <h1>US Stock Sentinel</h1>
+        <h1>{t(lang, 'brand')}</h1>
+        <LangToggle lang={lang} onChange={onLangChange} />
       </div>
 
       <div className="topbar-controls">
         <div className="field">
-          <label htmlFor="portfolio">Portfolio</label>
+          <label htmlFor="portfolio">{t(lang, 'portfolio')}</label>
           <select
             id="portfolio"
             value={selectedPortfolio}
@@ -48,7 +53,7 @@ export default function TopBar({
         </div>
 
         <div className="field">
-          <label htmlFor="cash">Cash</label>
+          <label htmlFor="cash">{t(lang, 'cash')}</label>
           <input
             id="cash"
             className="mono"
@@ -76,7 +81,7 @@ export default function TopBar({
           onClick={onToggleEdit}
         >
           <Pencil size={14} />
-          {editing ? 'Done' : 'Edit'}
+          {editing ? t(lang, 'done') : t(lang, 'edit')}
         </button>
 
         <button
@@ -86,12 +91,12 @@ export default function TopBar({
           disabled={refreshing}
         >
           <RefreshCw size={14} />
-          {refreshing ? '…' : 'Refresh'}
+          {refreshing ? '…' : t(lang, 'refresh')}
         </button>
 
         {editing ? (
           <button type="button" className="btn" onClick={onAddRow}>
-            <Plus size={14} /> Row
+            <Plus size={14} /> {t(lang, 'row')}
           </button>
         ) : null}
 
@@ -102,7 +107,7 @@ export default function TopBar({
             onClick={onSaveAll}
             disabled={saving || loading}
           >
-            {saving ? 'Saving…' : 'Save all'}
+            {saving ? t(lang, 'saving') : t(lang, 'saveAll')}
           </button>
         ) : null}
 
@@ -112,12 +117,12 @@ export default function TopBar({
           onClick={onAnalyze}
           disabled={analyzing || loading}
         >
-          {analyzing ? 'Analyzing…' : 'Analyze'}
+          {analyzing ? t(lang, 'analyzing') : t(lang, 'analyze')}
         </button>
 
-        <button type="button" className="btn btn-ghost" onClick={onLock} title="Lock site">
+        <button type="button" className="btn btn-ghost" onClick={onLock} title={t(lang, 'lockTitle')}>
           <Lock size={14} />
-          Lock
+          {t(lang, 'lock')}
         </button>
       </div>
     </header>
