@@ -112,14 +112,10 @@ export function displayName(symbol, lang, remoteZh = {}) {
     .trim()
     .toUpperCase();
   if (!ticker) return '';
-  if (lang === 'zh') {
-    const custom = String(remoteZh[ticker] || '').trim();
-    if (custom) return custom;
-    return NAMES[ticker]?.zh || '';
-  }
-  const row = NAMES[ticker];
-  if (!row) return '';
-  return row.en;
+  if (lang !== 'zh') return '';
+  const custom = String(remoteZh[ticker] || '').trim();
+  if (custom) return custom;
+  return NAMES[ticker]?.zh || '';
 }
 
 export function chineseName(symbol, remoteZh = {}) {
