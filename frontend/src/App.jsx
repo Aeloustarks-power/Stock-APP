@@ -76,6 +76,30 @@ function dipFromReport(report) {
   };
 }
 
+function quotesFromPositions(report) {
+  const positions = Array.isArray(report?.positions) ? report.positions : [];
+  const out = {};
+  for (const p of positions) {
+    const sym = String(p?.symbol || '').trim().toUpperCase();
+    const px = Number(p?.current_price);
+    if (!sym || !Number.isFinite(px) || px <= 0) continue;
+    out[sym] = Math.round(px * 100) / 100;
+  }
+  return out;
+}
+
+function normalizeQuotes(raw) {
+  const out = {};
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
+  for (const [key, value] of Object.entries(raw)) {
+    const sym = String(key || '').trim().toUpperCase();
+    const px = Number(value);
+    if (!sym || sym === 'CASH' || !Number.isFinite(px) || px <= 0) continue;
+    out[sym] = Math.round(px * 100) / 100;
+  }
+  return out;
+}
+
 function App() {
   const [lang, setLang] = useState(loadLang);
   const [unlocked, setUnlocked] = useState(false);
@@ -121,6 +145,7 @@ function App() {
   const [ideasWebhook, setIdeasWebhook] = useState(null);
   const [nameRev, setNameRev] = useState(0);
   const [chineseNames, setChineseNames] = useState({});
+  const [lastQuotes, setLastQuotes] = useState({});
 
   const handleLangChange = (next) => {
     const nextLang = next === 'zh' ? 'zh' : 'en';
@@ -236,6 +261,16 @@ function App() {
     }
   }, [lang]);
 
+  const mergeQuotes = useCallback((incoming, persist, fillOnly = false) => {
+    const add = normalizeQuotes(incoming);
+    if (!Object.keys(add).length) return;
+    setLastQuotes((prev) => {
+      const next = fillOnly ? { ...add, ...prev } : { ...prev, ...add };
+      if (persist) saveLastAnalysis(selectedPortfolio, { lastQuotes: next });
+      return next;
+    });
+  }, [selectedPortfolio]);
+
   useEffect(() => {
     if (!unlocked) return;
     setEditingHoldings(false);
@@ -263,7 +298,33 @@ function App() {
     setDip(saved?.dip && typeof saved.dip === 'object' ? saved.dip : null);
     setCashFloorPct(Number(saved?.cashFloorPct ?? 0.15) || 0.15);
     setWhyNoActions(Array.isArray(saved?.whyNoActions) ? saved.whyNoActions : []);
+    setLastQuotes(normalizeQuotes(saved?.lastQuotes));
   }, [selectedPortfolio]);
+
+  useEffect(() => {
+    if (!unlocked) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const response = await apiFetch('/api/snapshots');
+        if (!response.ok || cancelled) return;
+        const data = await response.json();
+        if (cancelled) return;
+        mergeQuotes(data?.quotes, false, true);
+        if (data?.updated_at) {
+          setSnapshotMeta({
+            updated_at: data.updated_at,
+            symbol_count: data.symbol_count,
+          });
+        }
+      } catch {
+        // lastQuotes from localStorage still show
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [unlocked, selectedPortfolio, mergeQuotes]);
 
   const updateRow = (id, field, value) => {
     setRows((prev) =>
@@ -451,6 +512,11 @@ function App() {
       const nextDip = dipFromReport(report);
       const nextFloor = Number(report?.policy?.constraints?.cash_floor_pct ?? 0.15) || 0.15;
       const nextWhy = Array.isArray(report?.why_no_other_actions) ? report.why_no_other_actions : [];
+      const nextQuotes = {
+        ...normalizeQuotes(loadLastAnalysis(selectedPortfolio)?.lastQuotes),
+        ...quotesFromPositions(report),
+        ...normalizeQuotes(nextSnap?.quotes),
+      };
       setAiAnalysis(nextAnalysis);
       setAiNote(nextNote);
       setAiWarnings(nextWarnings);
@@ -466,6 +532,7 @@ function App() {
       setWhyNoActions(nextWhy);
       setAiError(data?.ai_error || data?.suggest_error || null);
       setIdeasWebhook(data?.webhook || null);
+      setLastQuotes(nextQuotes);
       const stored = saveLastAnalysis(selectedPortfolio, {
         aiAnalysis: nextAnalysis,
         aiNote: nextNote,
@@ -480,6 +547,7 @@ function App() {
         dip: nextDip,
         cashFloorPct: nextFloor,
         whyNoActions: nextWhy,
+        lastQuotes: nextQuotes,
       });
       setAnalysisSavedAt(stored.savedAt);
     } catch (err) {
@@ -555,6 +623,7 @@ function App() {
         updated_at: data.updated_at,
         symbol_count: data.symbol_count,
       });
+      mergeQuotes(data?.quotes, true);
     } catch (err) {
       setError(friendlyNetworkError(err, lang));
     } finally {
@@ -673,6 +742,7 @@ function App() {
           loadError={null}
           nameRev={nameRev}
           chineseNames={chineseNames}
+          lastQuotes={lastQuotes}
           onUpdateRow={updateRow}
           onRemoveRow={removeRow}
           onRetry={fetchPortfolio}

@@ -25,6 +25,7 @@ const COPY = {
   symbol: { en: 'Symbol', zh: '代码' },
   shares: { en: 'Shares', zh: '股数' },
   costShare: { en: 'Cost / share', zh: '成本/股' },
+  lastPrice: { en: 'Last price', zh: '现价' },
   chineseName: { en: 'Chinese name', zh: '中文名' },
   chineseNameHint: {
     en: 'Chinese names save to Supabase (Edit, then leave the field). Same on every phone.',
