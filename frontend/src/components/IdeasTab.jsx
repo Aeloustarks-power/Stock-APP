@@ -49,7 +49,12 @@ export default function IdeasTab({
             <article key={s.symbol} className="idea-card">
               <div className="head">
                 <span className="ticker-stack">
-                  <span>{s.symbol}</span>
+                  <span>
+                    {s.symbol}
+                    {s.already_held ? (
+                      <span className="held-pill">{t(lang, 'alreadyHeld')}</span>
+                    ) : null}
+                  </span>
                   {name ? <span className="ticker-name">{name}</span> : null}
                 </span>
                 <span>

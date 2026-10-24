@@ -132,9 +132,10 @@ const COPY = {
   moreIdeas: { en: 'More ideas', zh: '更多点子' },
   findingIdeas: { en: 'Finding ideas…', zh: '正在找点子…' },
   ideasHint: {
-    en: 'Skips holdings and names already shown this visit. Catalyst + risk from Gemini.',
-    zh: '跳过已持股和这次已出现的名字。催化剂和风险来自 Gemini。',
+    en: 'New names, plus a stock you already hold when it is up at least 40% vs cost and still above its 20-day average. Skips names already shown this visit.',
+    zh: '新标的；已持股若相对成本上涨至少 40%，且仍在 20 日均线之上，也会出现。跳过这次已看过的名字。',
   },
+  alreadyHeld: { en: 'You hold this', zh: '已持有' },
   ideasEmpty: {
     en: 'Tap More ideas (or Analyze) for portfolio-aware suggested buys.',
     zh: '点「更多点子」或「分析」，按组合给建议买入。',

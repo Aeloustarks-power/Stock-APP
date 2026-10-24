@@ -181,12 +181,25 @@ def screen_buy_candidates(
     extra_exclude: Optional[Iterable[str]] = None,
 ) -> List[Dict[str, Any]]:
     """Mechanical Nasdaq-100 shortlist for AI to rank (not invent tickers)."""
-    from backend.service import _rank_new_candidates
+    from backend.service import (
+        _rank_new_candidates,
+        _strong_held_candidates,
+        load_policy_config_from_env,
+    )
 
     positions = list(policy_report.get("positions") or [])
     held = {_normalize_symbol(str(p.get("symbol", ""))) for p in positions if p.get("symbol")}
     extra = {_normalize_symbol(str(s)) for s in (extra_exclude or []) if s}
-    return _rank_new_candidates(held | extra, limit=limit)
+    cap = load_policy_config_from_env().hard_cap_pct * 100
+    # Dip screen still skips every holding. Strong winners are added back so
+    # Ideas can recommend a name you already own when it is performing well.
+    strong = [
+        c
+        for c in _strong_held_candidates(positions, max_weight_pct=cap)
+        if c.get("symbol") not in extra
+    ][:3]
+    fresh = _rank_new_candidates(held | extra, limit=limit)
+    return strong + fresh
 
 
 def build_suggested_buys_prompt(
@@ -219,20 +232,28 @@ def build_suggested_buys_prompt(
     ]
     cand_lines = []
     for c in candidates:
+        held_bit = ""
+        if c.get("already_held"):
+            held_bit = (
+                f", already_held=yes, gain_vs_cost={c.get('gain_vs_cost_pct')}%, "
+                f"weight={c.get('weight_pct')}%"
+            )
         cand_lines.append(
-            f"- {c.get('symbol')}: screen_score={c.get('score')}, "
+            f"- {c.get('symbol')}: screen_score={c.get('score')}"
+            f"{held_bit}, "
             f"dd_from_high={c.get('drawdown_from_52w_high_pct')}%, "
             f"ret_1y={c.get('return_1y_pct')}%, "
             f"avg_$vol_30d={c.get('avg_dollar_vol_30d')}"
         )
     return f"""You are a US equities portfolio research assistant.
 Task: RANK 2-3 tickers ONLY from the screened candidate list below. Do NOT invent tickers outside that list.
-Near-duplicates of holdings are forbidden (e.g. no GOOG if GOOGL is held).
-Prefer names that fill a sector/theme gap vs this portfolio. If Skip is non-empty, do not repeat those tickers — explore the rest of the candidate list.
+A candidate marked already_held=yes is a stock this portfolio already owns that is up strongly. You MAY rank it. Say that it is already held, and why adding still makes sense. Do not pick any other held ticker.
+Near-duplicates of holdings are forbidden when that ticker is not itself on the candidate list (e.g. no GOOG if GOOGL is held and GOOG is not listed).
+Prefer names that fill a sector/theme gap, plus at most one already-held winner when its gain is the standout. If Skip is non-empty, do not repeat those tickers — explore the rest of the candidate list.
 Use Google Search for recent catalysts (earnings, product, regulation, sector rotation). Do NOT invent prices.
 Every narrative field must be bilingual: provide English AND Simplified Chinese (separate keys).
 
-Already held: {', '.join(held) or '(none)'}
+Already held (pick only if that ticker is on the candidate list with already_held=yes): {', '.join(held) or '(none)'}
 Skip (already shown this session — pick DIFFERENT tickers): {', '.join(skip) or '(none)'}
 
 Portfolio context:
@@ -267,7 +288,7 @@ Return ONLY valid JSON (no markdown fences) with this shape:
     }}
   ]
 }}
-confidence is 0-1. Prefer names that fill a sector/theme gap vs this portfolio, with a real recent catalyst.
+confidence is 0-1. Prefer names that fill a sector/theme gap vs this portfolio, with a real recent catalyst. An already_held winner is allowed when it is on the candidate list.
 If the candidate list is empty, return {{"suggestions": []}}.
 """
 
@@ -319,16 +340,22 @@ def parse_suggested_buys_json(text: str) -> List[Dict[str, Any]]:
 
 
 def enrich_suggested_buys(
-    suggestions: List[Dict[str, Any]], *, held: set
+    suggestions: List[Dict[str, Any]],
+    *,
+    held: set,
+    allow_held: Optional[set] = None,
 ) -> List[Dict[str, Any]]:
     from backend.market import _calc_position_metrics_cached
 
+    allowed_held = allow_held or set()
     enriched: List[Dict[str, Any]] = []
     for s in suggestions:
         sym = s["symbol"]
-        if sym in held:
+        if sym in held and sym not in allowed_held:
             continue
         row = dict(s)
+        if sym in held:
+            row["already_held"] = True
         try:
             metrics = _calc_position_metrics_cached(sym, 1.0, 0.0)
             row["metrics"] = {
@@ -403,6 +430,11 @@ def generate_suggested_buys(
         policy_report, limit=25 if extra else 15, extra_exclude=extra
     )
     allowed = {_normalize_symbol(str(c.get("symbol", ""))) for c in candidates if c.get("symbol")}
+    allow_held = {
+        _normalize_symbol(str(c.get("symbol", "")))
+        for c in candidates
+        if c.get("already_held") and c.get("symbol")
+    }
     temperature = 0.55 if extra else 0.4
     try:
         from google.genai import types  # type: ignore
@@ -422,7 +454,7 @@ def generate_suggested_buys(
         if allowed:
             parsed = [s for s in parsed if s.get("symbol") in allowed]
         parsed = [s for s in parsed if s.get("symbol") not in extra]
-        return enrich_suggested_buys(parsed, held=held), ""
+        return enrich_suggested_buys(parsed, held=held, allow_held=allow_held), ""
     except Exception as e:
         try:
             prompt = build_suggested_buys_prompt(
@@ -434,7 +466,10 @@ def generate_suggested_buys(
             if allowed:
                 parsed = [s for s in parsed if s.get("symbol") in allowed]
             parsed = [s for s in parsed if s.get("symbol") not in extra]
-            return enrich_suggested_buys(parsed, held=held), f"grounding_fallback: {e}"
+            return (
+                enrich_suggested_buys(parsed, held=held, allow_held=allow_held),
+                f"grounding_fallback: {e}",
+            )
         except Exception as e2:
             return [], str(e2)
 
