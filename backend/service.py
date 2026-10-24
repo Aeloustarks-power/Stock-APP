@@ -434,6 +434,87 @@ def _sector_breakdown(positions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return rows
 
 
+# Ideas may repeat a holding only when the gain vs cost is at least this
+# and the price is still at or above its 20-day average.
+STRONG_HELD_MIN_GAIN = 0.40
+# When cost basis is missing, "performing really well" means the price is
+# in the top fifth of its 1-year range (and still above MA20).
+STRONG_HELD_MIN_52W_PCTILE = 0.80
+
+
+def _position_gain_vs_cost(position: Dict[str, Any]) -> Optional[float]:
+    cost = _safe_float(position.get("total_cost"), 0.0)
+    if cost <= 0:
+        cost = _safe_float(position.get("shares"), 0.0) * _safe_float(
+            position.get("cost_basis"), 0.0
+        )
+    if cost <= 0:
+        return None
+    return _safe_float(position.get("pnl"), 0.0) / cost
+
+
+def is_strong_held_performer(
+    position: Dict[str, Any], *, max_weight_pct: float = 12.0
+) -> bool:
+    """True when a holding is up strongly and still in an uptrend.
+
+    Ideas may recommend it again. A name already at the hard-cap weight stays
+    out, because the rules would trim that position rather than add to it.
+    """
+    if position.get("short_history"):
+        return False
+    sym = _normalize_symbol(str(position.get("symbol") or ""))
+    if not sym or _is_cash_symbol(sym):
+        return False
+    if _safe_float(position.get("weight_pct"), 0.0) >= max_weight_pct:
+        return False
+    price = _safe_float(position.get("current_price"), 0.0)
+    ma20 = _safe_float(position.get("ma20"), 0.0)
+    if price <= 0 or ma20 <= 0 or price < ma20:
+        return False
+    gain = _position_gain_vs_cost(position)
+    if gain is None:
+        return (
+            _safe_float(position.get("high_52w_percentile"), 0.0)
+            >= STRONG_HELD_MIN_52W_PCTILE
+        )
+    return gain >= STRONG_HELD_MIN_GAIN
+
+
+def _strong_held_candidates(
+    positions: Iterable[Dict[str, Any]],
+    *,
+    max_weight_pct: float = 12.0,
+) -> List[Dict[str, Any]]:
+    """Holdings that cleared the strong-performer bar, best gain first."""
+    out: List[Dict[str, Any]] = []
+    for position in positions:
+        if not is_strong_held_performer(position, max_weight_pct=max_weight_pct):
+            continue
+        gain = _position_gain_vs_cost(position)
+        gain_pct = None if gain is None else round(gain * 100, 2)
+        near = _safe_float(position.get("near_52w_high_pct"), 0.0)
+        score_src = (
+            gain
+            if gain is not None
+            else _safe_float(position.get("high_52w_percentile"), 0.0)
+        )
+        out.append(
+            {
+                "symbol": _normalize_symbol(str(position.get("symbol"))),
+                "score": round(score_src * 100, 3),
+                "drawdown_from_52w_high_pct": round(near * 100, 2),
+                "return_1y_pct": None,
+                "gain_vs_cost_pct": gain_pct,
+                "weight_pct": round(_safe_float(position.get("weight_pct"), 0.0), 2),
+                "already_held": True,
+                "avg_dollar_vol_30d": None,
+            }
+        )
+    out.sort(key=lambda row: (-_safe_float(row.get("score"), 0.0), row["symbol"]))
+    return out
+
+
 def _rank_new_candidates(
     excluded_symbols: Iterable[str],
     *,
@@ -1379,7 +1460,11 @@ def run_idea_search(
     portfolio_id: Optional[str] = None,
     extra_exclude: Optional[Iterable[str]] = None,
 ) -> Dict[str, Any]:
-    """Fresh suggested buys, skipping holdings and extra_exclude (already-shown ideas)."""
+    """Fresh suggested buys.
+
+    Skips ordinary holdings and extra_exclude (already-shown ideas). A holding
+    that is up strongly can still be recommended.
+    """
     sb = _create_supabase_client()
     if not sb:
         raise RuntimeError(
